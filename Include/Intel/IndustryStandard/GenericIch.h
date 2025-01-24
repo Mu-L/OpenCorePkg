@@ -21,6 +21,12 @@
 //  Definitions beginning with "B_" are bits within registers.
 //  Definitions beginning with "V_" are meaningful values of bits within the registers.
 
+// Piix4PciAddressing PCI Bus Address for PIIX4
+
+#define PCI_BUS_NUMBER_PIIX4           0x00  ///< PIIX4 is on PCI Bus 0.
+#define PCI_DEVICE_NUMBER_PIIX4        7     ///< PIIX4 is Device 7.
+#define PCI_FUNCTION_NUMBER_PIIX4_PMC  3     ///< PMC is Function 3.
+
 // IchPciAddressing  PCI Bus Address for ICH.
 
 #define PCI_BUS_NUMBER_ICH           0x00    ///< ICH is on PCI Bus 0.
@@ -28,7 +34,17 @@
 #define PCI_FUNCTION_NUMBER_ICH_LPC  0       ///< LPC is Function 0.
 #define PCI_FUNCTION_NUMBER_ICH_PMC  2       ///< PMC is Function 2.
 
-#define V_ICH_PCI_VENDOR_ID  0x8086     ///< Intel vendor-id
+#define V_ICH_PCI_VENDOR_ID        0x8086    ///< Intel vendor-id
+#define V_PIIX4_PMC_PCI_DEVICE_ID  0x7113    ///< Intel PIIX4 PMC device-id
+#define V_VLV_PMC_PCI_DEVICE_ID    0x0F1C    ///< Intel Valley View PMC device-id
+#define V_CHT_PMC_PCI_DEVICE_ID    0x229C    ///< Intel Bay-Trail/Cherry-Trail PMC device-id
+
+// IchAcpiCntr   Control for the ICH's ACPI Counter.
+
+#define R_PIIX4_PM_BASE           0x40
+#define B_PIIX4_PM_BASE_BAR       0x0000FFC0
+#define R_PIIX4_PMREGMISC         0x80    ///< See PMIOSE
+#define B_PIIX4_PMREGMISC_PMIOSE  0x1
 
 // IchAcpiCntr   Control for the ICH's ACPI Counter.
 
@@ -61,6 +77,11 @@
 #define B_ICH_PMC_BAR2_BASE_BAR     B_ICH_BAR2_BASE_BAR
 #define B_ICH_PMC_BAR2_BASE_BAR_EN  B_ICH_BAR2_BASE_BAR_EN
 
+// Intel Braswell
+
+#define R_BRSW_PMC_ACPI_BASE      0x40
+#define B_BRSW_PMC_ACPI_BASE_BAR  0xFFFFFE00
+
 // AMD Bolton (AMD Bolton Register Reference Guide 3.03)
 
 #define R_AMD_ACPI_MMIO_BASE       0xFED80000    ///< AcpiMMioAddr (3-268)
@@ -72,6 +93,10 @@
 #define R_ACPI_PM1_TMR          0x08
 #define V_ACPI_TMR_FREQUENCY    3579545
 #define V_ACPI_PM1_TMR_MAX_VAL  0x01000000  ///< The timer is 24 bit overflow.
+
+/// Macro to generate the PCI address of any given PIIX4 PMC Register.
+#define PCI_PIIX4_PMC_ADDRESS(Register) \
+  ((UINTN)(PCI_LIB_ADDRESS (PCI_BUS_NUMBER_PIIX4, PCI_DEVICE_NUMBER_PIIX4, PCI_FUNCTION_NUMBER_PIIX4_PMC, (Register))))
 
 /// Macro to generate the PCI address of any given ICH LPC Register.
 #define PCI_ICH_LPC_ADDRESS(Register) \

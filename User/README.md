@@ -32,7 +32,7 @@ Additional variables are supported to adjust the compilation process.
 - `DEBUG=1` — build with debugging information.
 - `FUZZ=1` — build with fuzzing enabled.
 - `FUZZ_JOBS=2` — run with 2 fuzzing jobs (defaults to 4).
-- `FUZZ_MEM=1024` - run with 1024 MB fuzzing memory limit (defaults to 4096).
+- `FUZZ_MEM=1024` - run with 1024 MB fuzzing memory limit (defaults to 4096)*.
 - `SANITIZE=1` — build with LLVM sanitizers enabled.
 - `CC=cc` — build with `cc` compiler (e.g. `i686-w64-mingw32-gcc` for Windows).
 - `DIST=Target` — build for target `Target` (e.g. `Darwin`, `Linux`, `Windows`).
@@ -43,19 +43,40 @@ Additional variables are supported to adjust the compilation process.
 - `WERROR=1` — treat compiler warnings as errors.
 - `SYDR=1` — change `$(SUFFIX)` to store compilation results for Sydr DSE in a directory distinct from the default one.
 
-Example 1. To build for 32-bit Windows (requires MinGW installed) use the following command:
+*NOTE: If your program uses `UserBaseMemoryLib` and calls custom allocation functions, be sure that besides `FUZZ_MEM` limit you correctly set limit `mPoolAllocationSizeLimit` which defaults to the 512 MB in cases if your code could allocate more than this limit at single AllocatePool.
+
+To set up your limit, use `SetPoolAllocationSizeLimit` routine like shown in the example below:
+
+```
+...
+#include <UserMemory.h>
+
+int main(int argc, char *argv[]) {
+  SetPoolAllocationSizeLimit (SINGLE_ALLOCATION_MEMORY_LIMIT);
+  /* your code goes here */
+  return 0;
+}
+```
+
+Example 1. To build 32-bit version of utility on macOS (use High Sierra 10.13 or below):
+
+```sh
+UDK_ARCH=Ia32 make
+```
+
+Example 2. To build for 32-bit Windows (requires MinGW installed) use the following command:
 
 ```sh
 UDK_ARCH=Ia32 CC=i686-w64-mingw32-gcc STRIP=i686-w64-mingw32-strip DIST=Windows make
 ```
 
-Example 2. To build with LLVM sanitizers use the following command:
+Example 3. To build with LLVM sanitizers use the following command:
 
 ```sh
 DEBUG=1 SANITIZE=1 make
 ```
 
-Example 3. Perform fuzzing and generate coverage report:
+Example 4. Perform fuzzing and generate coverage report:
 
 ```sh
 # MacPorts clang is used since Xcode clang has no fuzzing support.
@@ -67,7 +88,7 @@ COVERAGE=1 DEBUG=1 make coverage
 
 Note: fuzzing corpus is saved in `FUZZDICT`.
 
-Example 4. Perform fuzzing with the help of [Sydr](https://www.ispras.ru/en/technologies/crusher/) tool (path to which should be in `$PATH`):
+Example 5. Perform fuzzing with the help of [Sydr](https://www.ispras.ru/en/technologies/crusher/) tool (path to which should be in `$PATH`):
 
 ```sh
 CC=clang DEBUG=1 FUZZ=1 SANITIZE=1 make

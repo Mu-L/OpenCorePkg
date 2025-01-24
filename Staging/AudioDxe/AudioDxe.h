@@ -68,27 +68,4 @@ extern EFI_AUDIO_DECODE_PROTOCOL    gEfiAudioDecodeProtocol;
 // REF: MdeModulePkg/Core/Dxe/Event/Timer.c
 #define TPL_DXE_CORE_TIMER  (TPL_HIGH_LEVEL - 1)
 
-// GPIO setup stages.
-#define GPIO_SETUP_STAGE_DATA       BIT0
-#define GPIO_SETUP_STAGE_DIRECTION  BIT1
-#define GPIO_SETUP_STAGE_ENABLE     BIT2
-
-#define GPIO_SETUP_STAGE_NONE  0
-
-#define GPIO_SETUP_STAGE_ALL  (   \
-  GPIO_SETUP_STAGE_DATA         | \
-  GPIO_SETUP_STAGE_DIRECTION    | \
-  GPIO_SETUP_STAGE_ENABLE       \
-  )
-
-// GPIO setup pin mask.
-#define GPIO_PIN_MASK_AUTO  0              ///< Auto: use all reported available pins.
-
-//
-// Stored parsed config.
-//
-extern UINTN    gGpioSetupStageMask;
-extern UINTN    gGpioPinMask;
-extern BOOLEAN  gRestoreNoSnoop;
-
 #endif // EFI_AUDIODXE_H

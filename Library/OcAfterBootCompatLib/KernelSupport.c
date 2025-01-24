@@ -321,13 +321,6 @@ RestoreProtectedRtMemoryTypes (
   }
 }
 
-/**
-  Prepare environment for normal booting. Called when boot.efi jumps to kernel.
-
-  @param[in,out]  BootCompat    Boot compatibility context.
-  @param[in,out]  BootArgs      Apple kernel boot arguments.
-**/
-STATIC
 VOID
 AppleMapPrepareForBooting (
   IN OUT BOOT_COMPAT_CONTEXT  *BootCompat,
@@ -384,10 +377,10 @@ AppleMapPrepareForBooting (
     }
   }
 
-  if (BootCompat->KernelState.RelocationBlock != 0) {
+  if ((BootCompat->KernelState.RelocationBlock != 0) && !BootCompat->KernelState.RelocationBlockLegacy) {
     //
-    // When using Relocation Block EfiBoot will not virtualize the addresses since they
-    // cannot be mapped 1:1 due to any region from the relocation block being outside
+    // When using Relocation Block, EfiBoot on macOS 10.6 and newer will not virtualize the addresses
+    // since they cannot be mapped 1:1 due to any region from the relocation block being outside
     // of static XNU vaddr to paddr mapping. This causes a clean early exit in their
     // SetVirtualAddressMap calling routine avoiding gRT->SetVirtualAddressMap.
     //
@@ -439,13 +432,6 @@ AppleMapPrepareForBooting (
   }
 }
 
-/**
-  Prepare environment for hibernate wake. Called when boot.efi jumps to kernel.
-
-  @param[in,out]  BootCompat       Boot compatibility context.
-  @param[in,out]  ImageHeaderPage  Apple hibernate image page number.
-**/
-STATIC
 VOID
 AppleMapPrepareForHibernateWake (
   IN OUT BOOT_COMPAT_CONTEXT  *BootCompat,
@@ -618,55 +604,6 @@ AppleMapPrepareBooterState (
   }
 }
 
-VOID
-AppleMapPrepareKernelJump (
-  IN OUT BOOT_COMPAT_CONTEXT   *BootCompat,
-  IN     EFI_PHYSICAL_ADDRESS  CallGate
-  )
-{
-  CALL_GATE_JUMP  *CallGateJump;
-
-  //
-  // There is no reason to patch the kernel when we do not need it.
-  //
-  if (  !BootCompat->Settings.AvoidRuntimeDefrag
-     && !BootCompat->Settings.DiscardHibernateMap
-     && !BootCompat->Settings.AllowRelocationBlock
-     && !BootCompat->Settings.DisableSingleUser
-     && !BootCompat->Settings.ForceBooterSignature)
-  {
-    return;
-  }
-
- #ifndef MDE_CPU_X64
-  RUNTIME_DEBUG ((DEBUG_ERROR, "OCABC: Kernel trampolines are unsupported for non-X64\n"));
-  CpuDeadLoop ();
- #endif
-
-  //
-  // Check whether we have address and abort if not.
-  //
-  if (CallGate == 0) {
-    RUNTIME_DEBUG ((DEBUG_ERROR, "OCABC: Failed to find call gate address\n"));
-    return;
-  }
-
-  CallGateJump = (VOID *)(UINTN)CallGate;
-
-  //
-  // Move call gate jump bytes front.
-  //
-  CopyMem (
-    CallGateJump + 1,
-    CallGateJump,
-    ESTIMATED_CALL_GATE_SIZE
-    );
-
-  CallGateJump->Command  = 0x25FF;
-  CallGateJump->Argument = 0x0;
-  CallGateJump->Address  = (UINTN)AppleMapPrepareKernelState;
-}
-
 EFI_STATUS
 AppleMapPrepareMemState (
   IN OUT BOOT_COMPAT_CONTEXT    *BootCompat,
@@ -676,7 +613,10 @@ AppleMapPrepareMemState (
   IN     EFI_MEMORY_DESCRIPTOR  *MemoryMap
   )
 {
-  EFI_STATUS  Status;
+  EFI_STATUS             Status;
+  UINTN                  NumEntries;
+  UINTN                  Index;
+  EFI_MEMORY_DESCRIPTOR  *Desc;
 
   //
   // Protect RT areas from relocation by marking then MemMapIO.
@@ -690,6 +630,25 @@ AppleMapPrepareMemState (
       BootCompat->KernelState.SysTableRtArea,
       BootCompat->KernelState.SysTableRtAreaSize
       );
+  }
+
+  //
+  // macOS 10.4 and 10.5 always call SetVirtualAddressMap, even when using a relocation block.
+  // Perform adjustment of virtual addresses here to their final positions.
+  //
+  if (BootCompat->KernelState.RelocationBlockLegacy) {
+    Desc       = MemoryMap;
+    NumEntries = MemoryMapSize / DescriptorSize;
+
+    for (Index = 0; Index < NumEntries; ++Index) {
+      if (  (Desc->VirtualStart >= BootCompat->KernelState.RelocationBlock + BootCompat->KernelState.RelocationBlockUsed)
+         && (Desc->VirtualStart < BootCompat->KernelState.RelocationBlock + ESTIMATED_KERNEL_SIZE))
+      {
+        Desc->VirtualStart -= BootCompat->KernelState.RelocationBlock - KERNEL_BASE_PADDR;
+      }
+
+      Desc = NEXT_MEMORY_DESCRIPTOR (Desc, DescriptorSize);
+    }
   }
 
   //
@@ -724,44 +683,4 @@ AppleMapPrepareMemState (
   }
 
   return Status;
-}
-
-UINTN
-EFIAPI
-AppleMapPrepareKernelState (
-  IN UINTN  Args,
-  IN UINTN  EntryPoint
-  )
-{
-  BOOT_COMPAT_CONTEXT  *BootCompatContext;
-  KERNEL_CALL_GATE     CallGate;
-
-  BootCompatContext = GetBootCompatContext ();
-
-  if (BootCompatContext->ServiceState.AppleHibernateWake) {
-    AppleMapPrepareForHibernateWake (
-      BootCompatContext,
-      Args
-      );
-  } else {
-    AppleMapPrepareForBooting (
-      BootCompatContext,
-      (VOID *)Args
-      );
-  }
-
-  CallGate = (KERNEL_CALL_GATE)(UINTN)(
-                                       BootCompatContext->ServiceState.KernelCallGate + CALL_GATE_JUMP_SIZE
-                                       );
-
-  if (BootCompatContext->KernelState.RelocationBlock != 0) {
-    return AppleRelocationCallGate (
-             BootCompatContext,
-             CallGate,
-             Args,
-             EntryPoint
-             );
-  }
-
-  return CallGate (Args, EntryPoint);
 }

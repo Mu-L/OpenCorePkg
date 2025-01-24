@@ -15,8 +15,8 @@
 #ifndef OC_STORAGE_LIB_H
 #define OC_STORAGE_LIB_H
 
+#include <Library/BaseOverflowLib.h>
 #include <Library/OcCryptoLib.h>
-#include <Library/OcGuardLib.h>
 #include <Library/OcFileLib.h>
 #include <Library/OcSerializeLib.h>
 
@@ -41,7 +41,7 @@
 #define OC_STORAGE_SAFE_PATH_MAX  128
 
 /**
-  Structure declaration for valult file.
+  Structure declaration for vault file.
 **/
 #define OC_STORAGE_VAULT_HASH_FIELDS(_, __) \
   _(UINT8      , Hash     , [SHA256_DIGEST_SIZE] , {0}         , () )

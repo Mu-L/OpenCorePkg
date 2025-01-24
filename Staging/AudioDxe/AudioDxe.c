@@ -32,10 +32,6 @@
 #include <Library/OcBootManagementLib.h>
 #include <Library/OcFlexArrayLib.h>
 
-UINTN    gGpioSetupStageMask = GPIO_SETUP_STAGE_NONE;
-UINTN    gGpioPinMask        = GPIO_PIN_MASK_AUTO;
-BOOLEAN  gRestoreNoSnoop     = FALSE;
-
 /**
   HdaController Driver Binding.
 **/
@@ -71,6 +67,7 @@ AudioDxeInit (
 {
   EFI_STATUS                 Status;
   EFI_LOADED_IMAGE_PROTOCOL  *LoadedImage;
+  CHAR16                     *DevicePathName;
   OC_FLEX_ARRAY              *ParsedLoadOptions;
 
   //
@@ -86,31 +83,53 @@ AudioDxeInit (
     return Status;
   }
 
+  DevicePathName = NULL;
+
   Status = OcParseLoadOptions (LoadedImage, &ParsedLoadOptions);
   if (!EFI_ERROR (Status)) {
-    gRestoreNoSnoop = OcHasParsedVar (ParsedLoadOptions, L"--restore-nosnoop", TRUE);
+    gRestoreNoSnoop = OcHasParsedVar (ParsedLoadOptions, L"--restore-nosnoop", OcStringFormatUnicode);
 
-    Status = OcParsedVarsGetInt (ParsedLoadOptions, L"--gpio-setup", &gGpioSetupStageMask, TRUE);
-    if ((Status == EFI_NOT_FOUND) && OcHasParsedVar (ParsedLoadOptions, L"--gpio-setup", TRUE)) {
+    Status = OcParsedVarsGetInt (ParsedLoadOptions, L"--gpio-setup", &gGpioSetupStageMask, OcStringFormatUnicode);
+    if ((Status == EFI_NOT_FOUND) && OcHasParsedVar (ParsedLoadOptions, L"--gpio-setup", OcStringFormatUnicode)) {
       gGpioSetupStageMask = GPIO_SETUP_STAGE_ALL;
     }
 
-    DEBUG ((DEBUG_INFO, "HDA: GPIO setup stages 0x%X, restore NSNPEN %d\n", gGpioSetupStageMask, gRestoreNoSnoop));
-
     if (gGpioSetupStageMask != GPIO_SETUP_STAGE_NONE) {
-      OcParsedVarsGetInt (ParsedLoadOptions, L"--gpio-pins", &gGpioPinMask, TRUE);
-      DEBUG ((
-        DEBUG_INFO,
-        "HDA: GPIO pin mask 0x%X%a\n",
-        gGpioPinMask,
-        gGpioPinMask == 0 ? " (auto)" : ""
-        ));
+      OcParsedVarsGetInt (ParsedLoadOptions, L"--gpio-pins", &gGpioPinMask, OcStringFormatUnicode);
     }
+
+    OcParsedVarsGetUnicodeStr (ParsedLoadOptions, L"--force-device", &DevicePathName);
+    if (DevicePathName != NULL) {
+      gForcedControllerDevicePath = ConvertTextToDevicePath (DevicePathName);
+    }
+
+    OcParsedVarsGetInt (ParsedLoadOptions, L"--codec-setup-delay", &gCodecSetupDelay, OcStringFormatUnicode);
+
+    Status = OcParsedVarsGetInt (ParsedLoadOptions, L"--force-codec", &gForcedCodec, OcStringFormatUnicode);
+    if (Status != EFI_NOT_FOUND) {
+      gUseForcedCodec = TRUE;
+    }
+
+    gCodecUseConnNoneNode = OcHasParsedVar (ParsedLoadOptions, L"--use-conn-none", OcStringFormatUnicode);
 
     OcFlexArrayFree (&ParsedLoadOptions);
   } else if (Status != EFI_NOT_FOUND) {
     return Status;
   }
+
+  DEBUG ((
+    DEBUG_INFO,
+    "HDA: GPIO stages 0x%X mask 0x%X%a; Restore NSNPEN %d; Force device %s codec %u(%u); Conn none %u; Delay %u\n",
+    gGpioSetupStageMask,
+    gGpioPinMask,
+    gGpioPinMask == 0 ? " (auto)" : "",
+    gRestoreNoSnoop,
+    DevicePathName,
+    gUseForcedCodec,
+    gForcedCodec,
+    gCodecUseConnNoneNode,
+    gCodecSetupDelay
+    ));
 
   //
   // Register HdaController Driver Binding.

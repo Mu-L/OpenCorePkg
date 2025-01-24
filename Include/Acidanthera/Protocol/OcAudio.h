@@ -19,7 +19,7 @@
 #include <Protocol/AppleVoiceOver.h>
 #include <Protocol/DevicePath.h>
 
-#define OC_AUDIO_PROTOCOL_REVISION  0x060000
+#define OC_AUDIO_PROTOCOL_REVISION  0x070000
 
 //
 // OC_AUDIO_PROTOCOL_GUID
@@ -50,11 +50,13 @@ typedef struct OC_AUDIO_PROTOCOL_ OC_AUDIO_PROTOCOL;
 #define  OC_VOICE_OVER_AUDIO_FILE_EXTERNAL              "External"
 #define  OC_VOICE_OVER_AUDIO_FILE_EXTERNAL_OS           "ExternalOS"
 #define  OC_VOICE_OVER_AUDIO_FILE_EXTERNAL_TOOL         "ExternalTool"
+#define  OC_VOICE_OVER_AUDIO_FILE_FIRMWARE_SETTINGS     "FirmwareSettings"
 #define  OC_VOICE_OVER_AUDIO_FILE_LOADING               "Loading"
 #define  OC_VOICE_OVER_AUDIO_FILE_MAC_OS                "macOS"
 #define  OC_VOICE_OVER_AUDIO_FILE_MAC_OS_RECOVERY       "macOS_Recovery"
 #define  OC_VOICE_OVER_AUDIO_FILE_MAC_OS_TIME_MACHINE   "macOS_TimeMachine"
 #define  OC_VOICE_OVER_AUDIO_FILE_MAC_OS_UPDATE_FW      "macOS_UpdateFw"
+#define  OC_VOICE_OVER_AUDIO_FILE_NETWORK_BOOT          "NetworkBoot"
 #define  OC_VOICE_OVER_AUDIO_FILE_OTHER_OS              "OtherOS"
 #define  OC_VOICE_OVER_AUDIO_FILE_PASSWORD_ACCEPTED     "PasswordAccepted"
 #define  OC_VOICE_OVER_AUDIO_FILE_PASSWORD_INCORRECT    "PasswordIncorrect"
@@ -237,7 +239,7 @@ EFI_STATUS
   Set playback delay.
 
   @param[in,out] This         Audio protocol instance.
-  @param[in]     Delay        Delay after audio configuration in microseconds.
+  @param[in]     Delay        Delay after audio configuration in milliseconds.
 
   @return previous delay, defaults to 0.
 **/

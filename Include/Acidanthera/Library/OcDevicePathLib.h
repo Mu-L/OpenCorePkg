@@ -40,6 +40,18 @@ AppendFileNameDevicePath (
   );
 
 /**
+  Locate the terminating node inside the device path.
+
+  @param[in] DevicePath  The device path used in the search.
+
+  @return  Returned is the last Device Path Node.
+**/
+EFI_DEVICE_PATH_PROTOCOL *
+FindDevicePathEndNode (
+  IN EFI_DEVICE_PATH_PROTOCOL  *DevicePath
+  );
+
+/**
   Locate the node inside the device path specified by Type an SubType values.
 
   @param[in] DevicePath  The device path used in the search.
@@ -190,8 +202,8 @@ OcFileDevicePathFullNameSize (
 
   @param[out] PathName      On output, the full file path of FilePath.
   @param[in]  FilePath      The File Device Path to inspect.
-  @param[in]  PathNameSize  The size, in bytes, of PathnName.  Must equal the
-                            actual fill file path size.
+  @param[in]  PathNameSize  The size, in bytes, of PathName.  Must equal the
+                            actual full file path size.
 
 **/
 VOID
@@ -291,6 +303,8 @@ typedef struct {
                                  restore DevicePathNode's original content in
                                  the case of failure.
                                  On success, data may need to be freed.
+  @param[in]     ValidDevice     A device handle pointing to previous valid
+                                 device path if any.
 
   @retval -1  DevicePathNode could not be fixed.
   @retval 0   DevicePathNode was not modified and may be valid.
@@ -301,7 +315,8 @@ INTN
 OcFixAppleBootDevicePathNode (
   IN OUT EFI_DEVICE_PATH_PROTOCOL     **DevicePath,
   IN OUT EFI_DEVICE_PATH_PROTOCOL     **DevicePathNode,
-  OUT    APPLE_BOOT_DP_PATCH_CONTEXT  *RestoreContext OPTIONAL
+  OUT    APPLE_BOOT_DP_PATCH_CONTEXT  *RestoreContext OPTIONAL,
+  IN     EFI_HANDLE                   ValidDevice OPTIONAL
   );
 
 /**

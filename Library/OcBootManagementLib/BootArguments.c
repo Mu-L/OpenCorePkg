@@ -1,5 +1,5 @@
 /** @file
-  Copyright (C) 2019-2021, vit9696, mikebeaton. All rights reserved.<BR>
+  Copyright (C) 2019-2024, vit9696, mikebeaton. All rights reserved.<BR>
   SPDX-License-Identifier: BSD-3-Clause
 **/
 
@@ -24,19 +24,19 @@ typedef enum PARSE_VARS_STATE_ {
   PARSE_VARS_WHITE_SPACE,
   PARSE_VARS_COMMENT,
   PARSE_VARS_NAME,
-  PARSE_VARS_VALUE_FIRST,
   PARSE_VARS_VALUE,
   PARSE_VARS_QUOTED_VALUE,
   PARSE_VARS_SHELL_EXPANSION
 } PARSE_VARS_STATE;
 
 //
-// Shift from token start to current position forwards by offset characters.
+// Shift memory from token start to current position forwards by offset bytes
+// and update token to point to shifted start (thereby discarding offset bytes
+// from the token ending at current position).
 //
 #define SHIFT_TOKEN(pos, token, offset)  do {\
   CopyMem ((UINT8 *)(token) + (offset), (token), (UINT8 *)(pos) - (UINT8 *)(token)); \
   (token) = (UINT8 *)(token) + (offset); \
-  (pos)   = (UINT8 *)(pos) + (offset); \
 } while (0)
 
 VOID
@@ -245,18 +245,18 @@ OcAppendArgumentsToLoadedImage (
   //
   for (Index = 0; Index < ArgumentCount; ++Index) {
     ArgumentLength = AsciiStrSize (Arguments[Index]);
-    if (OcOverflowAddUN (TotalLength, ArgumentLength, &TotalLength)) {
+    if (BaseOverflowAddUN (TotalLength, ArgumentLength, &TotalLength)) {
       return FALSE;
     }
   }
 
-  if (OcOverflowMulUN (TotalLength, sizeof (CHAR16), &TotalLength)) {
+  if (BaseOverflowMulUN (TotalLength, sizeof (CHAR16), &TotalLength)) {
     return FALSE;
   }
 
   Replace |= LoadedImage->LoadOptionsSize < sizeof (CHAR16);
   if (  !Replace
-     && OcOverflowTriAddUN (TotalLength, sizeof (CHAR16), LoadedImage->LoadOptionsSize, &TotalLength))
+     && BaseOverflowTriAddUN (TotalLength, sizeof (CHAR16), LoadedImage->LoadOptionsSize, &TotalLength))
   {
     return FALSE;
   }
@@ -379,6 +379,39 @@ OcCheckArgumentFromEnv (
   return HasArgument;
 }
 
+BOOLEAN
+EFIAPI
+OcValidLoadOptions (
+  IN        UINT32  LoadOptionsSize,
+  IN CONST  VOID    *LoadOptions
+  )
+{
+  return (
+            (((LoadOptions) == NULL) == ((LoadOptionsSize) == 0))
+         && ((LoadOptionsSize) % sizeof (CHAR16) == 0)
+         && ((LoadOptionsSize) <= MAX_LOAD_OPTIONS_SIZE)
+         && (
+               ((LoadOptions) == NULL)
+            || (((CHAR16 *)(LoadOptions))[((LoadOptionsSize) / 2) - 1] == CHAR_NULL)
+               )
+            );
+}
+
+BOOLEAN
+EFIAPI
+OcHasLoadOptions (
+  IN        UINT32  LoadOptionsSize,
+  IN CONST  VOID    *LoadOptions
+  )
+{
+  return (
+            ((LoadOptions) != NULL)
+         && ((LoadOptionsSize) >= sizeof (CHAR16))
+         && (((LoadOptionsSize) % sizeof (CHAR16)) == 0)
+         && (((CHAR16 *)(LoadOptions))[((LoadOptionsSize) / 2) - 1] == CHAR_NULL)
+            );
+}
+
 EFI_STATUS
 OcParseLoadOptions (
   IN     CONST EFI_LOADED_IMAGE_PROTOCOL  *LoadedImage,
@@ -391,23 +424,20 @@ OcParseLoadOptions (
   ASSERT (ParsedVars != NULL);
   *ParsedVars = NULL;
 
-  if ((LoadedImage->LoadOptionsSize % sizeof (CHAR16) != 0) || (LoadedImage->LoadOptionsSize > MAX_LOAD_OPTIONS_SIZE)) {
+  if (!OcValidLoadOptions (LoadedImage->LoadOptionsSize, LoadedImage->LoadOptions)) {
     DEBUG ((DEBUG_ERROR, "OCB: Invalid LoadOptions (%p:%u)\n", LoadedImage->LoadOptions, LoadedImage->LoadOptionsSize));
     return EFI_INVALID_PARAMETER;
   }
 
-  if ((LoadedImage->LoadOptions == NULL) ||
-      (LoadedImage->LoadOptionsSize == 0) ||
-      (((CHAR16 *)LoadedImage->LoadOptions)[0] == CHAR_NULL))
-  {
+  if (!OcHasLoadOptions (LoadedImage->LoadOptionsSize, LoadedImage->LoadOptions)) {
     DEBUG ((OC_TRACE_PARSE_VARS, "OCB: No LoadOptions (%p:%u)\n", LoadedImage->LoadOptions, LoadedImage->LoadOptionsSize));
     return EFI_NOT_FOUND;
   }
 
-  Status = OcParseVars (LoadedImage->LoadOptions, ParsedVars, TRUE);
+  Status = OcParseVars (LoadedImage->LoadOptions, ParsedVars, OcStringFormatUnicode, FALSE);
 
   if (Status == EFI_INVALID_PARAMETER) {
-    DEBUG ((DEBUG_ERROR, "OCB: Invalid LoadOptions (%p:%u)\n", LoadedImage->LoadOptions, LoadedImage->LoadOptionsSize));
+    DEBUG ((DEBUG_ERROR, "OCB: Failed to parse LoadOptions (%p:%u)\n", LoadedImage->LoadOptions, LoadedImage->LoadOptionsSize));
   } else if (Status == EFI_NOT_FOUND) {
     DEBUG ((DEBUG_WARN, "OCB: Empty LoadOptions\n"));
   }
@@ -417,21 +447,26 @@ OcParseLoadOptions (
 
 EFI_STATUS
 OcParseVars (
-  IN           VOID        *StrVars,
-  OUT       OC_FLEX_ARRAY  **ParsedVars,
-  IN     CONST BOOLEAN     IsUnicode
+  IN           VOID              *StrVars,
+  OUT       OC_FLEX_ARRAY        **ParsedVars,
+  IN     CONST OC_STRING_FORMAT  StringFormat,
+  IN     CONST BOOLEAN           TokensOnly
   )
 {
   VOID              *Pos;
+  VOID              *NewPos;
   PARSE_VARS_STATE  State;
   PARSE_VARS_STATE  PushState;
   BOOLEAN           Retake;
   CHAR16            Ch;
+  CHAR16            NewCh;
+  CHAR16            QuoteChar;
   VOID              *Name;
   VOID              *Value;
+  VOID              *OriginalValue;
   OC_PARSED_VAR     *Option;
 
-  if ((StrVars == NULL) || (IsUnicode ? (((CHAR16 *)StrVars)[0] == CHAR_NULL) : (((CHAR8 *)StrVars)[0] == '\0'))) {
+  if ((StrVars == NULL) || ((StringFormat == OcStringFormatUnicode) ? (((CHAR16 *)StrVars)[0] == CHAR_NULL) : (((CHAR8 *)StrVars)[0] == '\0'))) {
     DEBUG ((OC_TRACE_PARSE_VARS, "OCB: No vars (%p)\n", StrVars));
     return EFI_NOT_FOUND;
   }
@@ -445,16 +480,32 @@ OcParseVars (
   State     = PARSE_VARS_WHITE_SPACE;
   PushState = PARSE_VARS_WHITE_SPACE;
   Retake    = FALSE;
+  QuoteChar = CHAR_NULL;
 
   do {
-    Ch = IsUnicode ? *((CHAR16 *)Pos) : *((CHAR8 *)Pos);
+    Ch = (StringFormat == OcStringFormatUnicode) ? *((CHAR16 *)Pos) : *((CHAR8 *)Pos);
     switch (State) {
       case PARSE_VARS_WHITE_SPACE:
         if (Ch == '#') {
           State = PARSE_VARS_COMMENT;
-        } else if (!(OcIsSpace (Ch) || (Ch == CHAR_NULL))) {
-          Name  = Pos;
-          State = PARSE_VARS_NAME;
+        } else if (!OcIsSpaceOrNull (Ch)) {
+          if (TokensOnly) {
+            Option = OcFlexArrayAddItem (*ParsedVars);
+            if (Option == NULL) {
+              OcFlexArrayFree (ParsedVars);
+              return EFI_OUT_OF_RESOURCES;
+            }
+
+            DEBUG ((OC_TRACE_PARSE_VARS, "OCB: Value-only token\n"));
+
+            State         = PARSE_VARS_VALUE;
+            Value         = Pos;
+            OriginalValue = Value;
+            Retake        = TRUE;
+          } else {
+            State = PARSE_VARS_NAME;
+            Name  = Pos;
+          }
         }
 
         break;
@@ -467,15 +518,17 @@ OcParseVars (
         break;
 
       case PARSE_VARS_NAME:
-        if ((Ch == L'=') || OcIsSpace (Ch) || (Ch == CHAR_NULL)) {
-          if (IsUnicode) {
+        if ((Ch == L'=') || OcIsSpaceOrNull (Ch)) {
+          if (StringFormat == OcStringFormatUnicode) {
             *((CHAR16 *)Pos) = CHAR_NULL;
           } else {
             *((CHAR8 *)Pos) = '\0';
           }
 
           if (Ch == L'=') {
-            State = PARSE_VARS_VALUE_FIRST;
+            State         = PARSE_VARS_VALUE;
+            Value         = (UINT8 *)Pos + ((StringFormat == OcStringFormatUnicode) ? sizeof (CHAR16) : sizeof (CHAR8));
+            OriginalValue = Value;
           } else {
             State = PARSE_VARS_WHITE_SPACE;
           }
@@ -486,7 +539,7 @@ OcParseVars (
             return EFI_OUT_OF_RESOURCES;
           }
 
-          if (IsUnicode) {
+          if (StringFormat == OcStringFormatUnicode) {
             Option->Unicode.Name = Name;
             DEBUG ((OC_TRACE_PARSE_VARS, "OCB: Name=\"%s\"\n", Name));
           } else {
@@ -503,18 +556,6 @@ OcParseVars (
 
         break;
 
-      case PARSE_VARS_VALUE_FIRST:
-        if (Ch == L'"') {
-          State = PARSE_VARS_QUOTED_VALUE;
-          Value = (UINT8 *)Pos + (IsUnicode ? sizeof (CHAR16) : sizeof (CHAR8));
-        } else {
-          State  = PARSE_VARS_VALUE;
-          Value  = Pos;
-          Retake = TRUE;
-        }
-
-        break;
-
       case PARSE_VARS_SHELL_EXPANSION:
         if (Ch == '`') {
           ASSERT (PushState != PARSE_VARS_WHITE_SPACE);
@@ -523,30 +564,46 @@ OcParseVars (
 
         break;
 
+      //
+      // In token value (but not name) we handle sh and grub quoting and string concatenation, e.g. 'abc\'"'\""def becomes abc\'"def.
+      //
       case PARSE_VARS_VALUE:
       case PARSE_VARS_QUOTED_VALUE:
-        if (Ch == L'`') {
+        if ((State != PARSE_VARS_QUOTED_VALUE) && ((Ch == L'\'') || (Ch == L'"'))) {
+          QuoteChar = Ch;
+          SHIFT_TOKEN (Pos, Value, (StringFormat == OcStringFormatUnicode) ? sizeof (CHAR16) : sizeof (CHAR8));
+          State = PARSE_VARS_QUOTED_VALUE;
+        } else if ((State == PARSE_VARS_QUOTED_VALUE) && (Ch == QuoteChar)) {
+          SHIFT_TOKEN (Pos, Value, (StringFormat == OcStringFormatUnicode) ? sizeof (CHAR16) : sizeof (CHAR8));
+          QuoteChar = CHAR_NULL;
+          State     = PARSE_VARS_VALUE;
+        } else if (((State != PARSE_VARS_QUOTED_VALUE) || (QuoteChar == L'"')) && (Ch == L'\\')) {
+          NewPos = (UINT8 *)Pos + ((StringFormat == OcStringFormatUnicode) ? sizeof (CHAR16) : sizeof (CHAR8));
+          NewCh  = (StringFormat == OcStringFormatUnicode) ? *((CHAR16 *)Pos) : *((CHAR8 *)Pos);
+          //
+          // https://www.gnu.org/software/bash/manual/html_node/Double-Quotes.html
+          //
+          if ((State != PARSE_VARS_QUOTED_VALUE) || (NewCh == '"') || (NewCh == '\\') || (NewCh == '$') || (NewCh == '`')) {
+            SHIFT_TOKEN (Pos, Value, (StringFormat == OcStringFormatUnicode) ? sizeof (CHAR16) : sizeof (CHAR8));
+            Pos = NewPos;
+            Ch  = NewCh;
+          }
+        } else if (Ch == L'`') {
           PushState = State;
           State     = PARSE_VARS_SHELL_EXPANSION;
-        } else if (Ch == L'\\') {
-          SHIFT_TOKEN (Pos, Value, IsUnicode ? sizeof (CHAR16) : sizeof (CHAR8));
-          Ch = IsUnicode ? *((CHAR16 *)Pos) : *((CHAR8 *)Pos);
-        } else if (
-                   ((State == PARSE_VARS_VALUE) && (OcIsSpace (Ch) || (Ch == CHAR_NULL))) ||
-                   ((State == PARSE_VARS_QUOTED_VALUE) && (Ch == '"')))
-        {
+        } else if ((State == PARSE_VARS_VALUE) && OcIsSpaceOrNull (Ch)) {
           //
-          // Explicitly quoted empty string needs to be stored detectably
-          // differently from missing value.
+          // Explicitly quoted empty string (e.g. `var=""`) is stored detectably differently from missing value (i.e. `var=`, or just `var`).
           //
-          if ((State != PARSE_VARS_QUOTED_VALUE) && (Pos == Value)) {
+          if (Pos == OriginalValue) {
+            ASSERT (!TokensOnly);
             DEBUG ((OC_TRACE_PARSE_VARS, "OCB: No value %u\n", 2));
           } else {
             if (PushState != PARSE_VARS_WHITE_SPACE) {
               DEBUG ((OC_TRACE_PARSE_VARS, "OCB: Found shell expansion, cancelling value\n"));
               PushState = PARSE_VARS_WHITE_SPACE;
             } else {
-              if (IsUnicode) {
+              if (StringFormat == OcStringFormatUnicode) {
                 *((CHAR16 *)Pos)      = CHAR_NULL;
                 Option->Unicode.Value = Value;
                 DEBUG ((OC_TRACE_PARSE_VARS, "OCB: Value=\"%s\"\n", Value));
@@ -558,9 +615,10 @@ OcParseVars (
             }
           }
 
-          Value  = NULL;
-          Option = NULL;
-          State  = PARSE_VARS_WHITE_SPACE;
+          Value         = NULL;
+          OriginalValue = NULL;
+          Option        = NULL;
+          State         = PARSE_VARS_WHITE_SPACE;
         }
 
         break;
@@ -573,7 +631,7 @@ OcParseVars (
     if (Retake) {
       Retake = FALSE;
     } else {
-      Pos = (UINT8 *)Pos + (IsUnicode ? sizeof (CHAR16) : sizeof (CHAR8));
+      Pos = (UINT8 *)Pos + ((StringFormat == OcStringFormatUnicode) ? sizeof (CHAR16) : sizeof (CHAR8));
     }
   } while (Ch != CHAR_NULL);
 
@@ -595,12 +653,24 @@ OcParseVars (
   return EFI_SUCCESS;
 }
 
+OC_PARSED_VAR *
+OcParsedVarsItemAt (
+  IN     CONST OC_FLEX_ARRAY  *ParsedVars,
+  IN     CONST UINTN          Index
+  )
+{
+  OC_PARSED_VAR  *Option;
+
+  Option = OcFlexArrayItemAt (ParsedVars, Index);
+  return Option;
+}
+
 BOOLEAN
 OcParsedVarsGetStr (
-  IN     CONST OC_FLEX_ARRAY  *ParsedVars,
-  IN     CONST VOID           *Name,
-  OUT       VOID              **Value,
-  IN     CONST BOOLEAN        IsUnicode
+  IN     CONST OC_FLEX_ARRAY     *ParsedVars,
+  IN     CONST VOID              *Name,
+  OUT       VOID                 **Value,
+  IN     CONST OC_STRING_FORMAT  StringFormat
   )
 {
   UINTN          Index;
@@ -617,7 +687,7 @@ OcParsedVarsGetStr (
 
   for (Index = 0; Index < ParsedVars->Count; ++Index) {
     Option = OcFlexArrayItemAt (ParsedVars, Index);
-    if (IsUnicode) {
+    if (StringFormat == OcStringFormatUnicode) {
       ASSERT (Option->Unicode.Name != NULL);
       if (StrCmp (Option->Unicode.Name, Name) == 0) {
         *Value = Option->Unicode.Value;
@@ -634,7 +704,7 @@ OcParsedVarsGetStr (
     }
   }
 
-  if (IsUnicode) {
+  if (StringFormat == OcStringFormatUnicode) {
     DEBUG ((OC_TRACE_PARSE_VARS, "OCB: No value for \"%s\"\n", Name));
   } else {
     DEBUG ((OC_TRACE_PARSE_VARS, "OCB: No value for \"%a\"\n", Name));
@@ -650,7 +720,7 @@ OcParsedVarsGetUnicodeStr (
   OUT       CHAR16            **Value
   )
 {
-  return OcParsedVarsGetStr (ParsedVars, Name, (VOID **)Value, TRUE);
+  return OcParsedVarsGetStr (ParsedVars, Name, (VOID **)Value, OcStringFormatUnicode);
 }
 
 BOOLEAN
@@ -660,33 +730,33 @@ OcParsedVarsGetAsciiStr (
   OUT       CHAR8             **Value
   )
 {
-  return OcParsedVarsGetStr (ParsedVars, Name, (VOID **)Value, FALSE);
+  return OcParsedVarsGetStr (ParsedVars, Name, (VOID **)Value, OcStringFormatAscii);
 }
 
 BOOLEAN
 OcHasParsedVar (
-  IN     CONST OC_FLEX_ARRAY  *ParsedVars,
-  IN     CONST VOID           *Name,
-  IN     CONST BOOLEAN        IsUnicode
+  IN     CONST OC_FLEX_ARRAY     *ParsedVars,
+  IN     CONST VOID              *Name,
+  IN     CONST OC_STRING_FORMAT  StringFormat
   )
 {
   VOID  *Value;
 
-  return OcParsedVarsGetStr (ParsedVars, Name, &Value, IsUnicode);
+  return OcParsedVarsGetStr (ParsedVars, Name, &Value, StringFormat);
 }
 
 EFI_STATUS
 OcParsedVarsGetInt (
-  IN     CONST OC_FLEX_ARRAY  *ParsedVars,
-  IN     CONST VOID           *Name,
-  OUT       UINTN             *Value,
-  IN     CONST BOOLEAN        IsUnicode
+  IN     CONST OC_FLEX_ARRAY     *ParsedVars,
+  IN     CONST VOID              *Name,
+  OUT       UINTN                *Value,
+  IN     CONST OC_STRING_FORMAT  StringFormat
   )
 {
   EFI_STATUS  Status;
   VOID        *StrValue;
 
-  if (!OcParsedVarsGetStr (ParsedVars, Name, &StrValue, IsUnicode)) {
+  if (!OcParsedVarsGetStr (ParsedVars, Name, &StrValue, StringFormat)) {
     return EFI_NOT_FOUND;
   }
 
@@ -694,7 +764,7 @@ OcParsedVarsGetInt (
     return EFI_NOT_FOUND;
   }
 
-  if (IsUnicode) {
+  if (StringFormat == OcStringFormatUnicode) {
     if (OcUnicodeStartsWith (StrValue, L"0x", TRUE)) {
       Status = StrHexToUintnS (StrValue, NULL, Value);
     } else {
@@ -713,16 +783,16 @@ OcParsedVarsGetInt (
 
 EFI_STATUS
 OcParsedVarsGetGuid (
-  IN     CONST OC_FLEX_ARRAY  *ParsedVars,
-  IN     CONST VOID           *Name,
-  OUT       EFI_GUID          *Value,
-  IN     CONST BOOLEAN        IsUnicode
+  IN     CONST OC_FLEX_ARRAY     *ParsedVars,
+  IN     CONST VOID              *Name,
+  OUT       EFI_GUID             *Value,
+  IN     CONST OC_STRING_FORMAT  StringFormat
   )
 {
   EFI_STATUS  Status;
   VOID        *StrValue;
 
-  if (!OcParsedVarsGetStr (ParsedVars, Name, &StrValue, IsUnicode)) {
+  if (!OcParsedVarsGetStr (ParsedVars, Name, &StrValue, StringFormat)) {
     return EFI_NOT_FOUND;
   }
 
@@ -730,7 +800,7 @@ OcParsedVarsGetGuid (
     return EFI_NOT_FOUND;
   }
 
-  if (IsUnicode) {
+  if (StringFormat == OcStringFormatUnicode) {
     Status = StrToGuid (StrValue, Value);
   } else {
     Status = AsciiStrToGuid (StrValue, Value);

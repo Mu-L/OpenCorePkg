@@ -17,16 +17,17 @@
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
+#include <Library/BaseOverflowLib.h>
 #include <Library/DebugLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/PrintLib.h>
 #include <Library/OcAppleKernelLib.h>
 #include <Library/OcFileLib.h>
-#include <Library/OcGuardLib.h>
 #include <Library/OcStringLib.h>
 #include <Library/OcVirtualFsLib.h>
 
 #include "CachelessInternal.h"
+#include "MkextInternal.h"
 #include "PrelinkedInternal.h"
 
 STATIC
@@ -397,7 +398,7 @@ ScanExtensions (
                        L"%s\\%s\\%s%s",
                        FilePath,
                        FileInfo->FileName,
-                       UseContents ? L"Contents\\MacOS\\" : L"\\",
+                       UseContents ? L"Contents\\MacOS\\" : L"",
                        BuiltinKext->BinaryFileName
                        );
             if (EFI_ERROR (Status)) {
@@ -807,8 +808,9 @@ CachelessContextAddKext (
   IN OUT CACHELESS_CONTEXT  *Context,
   IN     CONST CHAR8        *InfoPlist,
   IN     UINT32             InfoPlistSize,
-  IN     CONST UINT8        *Executable OPTIONAL,
-  IN     UINT32             ExecutableSize OPTIONAL
+  IN     UINT8              *Executable OPTIONAL,
+  IN     UINT32             ExecutableSize OPTIONAL,
+  OUT    CHAR8              BundleVersion[MAX_INFO_BUNDLE_VERSION_KEY_SIZE] OPTIONAL
   )
 {
   EFI_STATUS      Status;
@@ -823,6 +825,7 @@ CachelessContextAddKext (
   CONST CHAR8   *TmpKeyValue;
   UINT32        FieldCount;
   UINT32        FieldIndex;
+  CONST CHAR8   *BundleVerStr;
 
   BOOLEAN  Failed;
   BOOLEAN  IsLoadable;
@@ -932,9 +935,24 @@ CachelessContextAddKext (
           FreePool (NewKext);
           return EFI_INVALID_PARAMETER;
         }
-      } else if (AsciiStrCmp (TmpKeyValue, INFO_BUNDLE_LIBRARIES_64_KEY) == 0) {
-        InfoPlistLibraries64 = PlistNodeCast (InfoPlistValue, PLIST_NODE_TYPE_DICT);
-        if (InfoPlistLibraries64 == NULL) {
+      }
+    } else if (AsciiStrCmp (TmpKeyValue, INFO_BUNDLE_LIBRARIES_64_KEY) == 0) {
+      InfoPlistLibraries64 = PlistNodeCast (InfoPlistValue, PLIST_NODE_TYPE_DICT);
+      if (InfoPlistLibraries64 == NULL) {
+        XmlDocumentFree (InfoPlistDocument);
+        FreePool (TmpInfoPlist);
+        FreePool (NewKext->PlistData);
+        FreePool (NewKext);
+        return EFI_INVALID_PARAMETER;
+      }
+
+      if (!Context->Is32Bit) {
+        InfoPlistLibraries = InfoPlistLibraries64;
+      }
+    } else {
+      DEBUG_CODE_BEGIN ();
+      if ((BundleVersion != NULL) && (AsciiStrCmp (TmpKeyValue, INFO_BUNDLE_VERSION_KEY) == 0)) {
+        if (PlistNodeCast (InfoPlistValue, PLIST_NODE_TYPE_STRING) == NULL) {
           XmlDocumentFree (InfoPlistDocument);
           FreePool (TmpInfoPlist);
           FreePool (NewKext->PlistData);
@@ -942,10 +960,11 @@ CachelessContextAddKext (
           return EFI_INVALID_PARAMETER;
         }
 
-        if (!Context->Is32Bit) {
-          InfoPlistLibraries = InfoPlistLibraries64;
-        }
+        BundleVerStr = XmlNodeContent (InfoPlistValue);
+        AsciiStrCpyS (BundleVersion, MAX_INFO_BUNDLE_VERSION_KEY_SIZE, BundleVerStr);
       }
+
+      DEBUG_CODE_END ();
     }
   }
 
@@ -1012,6 +1031,17 @@ CachelessContextAddKext (
     // Ensure a binary name was found.
     //
     ASSERT (NewKext->BinaryFileName != NULL);
+
+    //
+    // Use only the binary for the current arch.
+    // Some versions of macOS 10.4 may incorrectly chose the 64-bit slice
+    // despite 32-bit being the only supported Intel architecture.
+    //
+    if (!InternalParseKextBinary (&Executable, &ExecutableSize, Context->Is32Bit)) {
+      FreePool (NewKext->PlistData);
+      FreePool (NewKext);
+      return EFI_INVALID_PARAMETER;
+    }
 
     NewKext->BinaryData = AllocateCopyPool (ExecutableSize, Executable);
     if (NewKext->BinaryData == NULL) {
@@ -1278,7 +1308,7 @@ CachelessContextPerformInject (
           ContentsMacOs->Size = ContentsMacOsEntrySize;
           CopyMem (ContentsMacOs->FileName, L"MacOS", L_STR_SIZE (L"MacOS"));
           ContentsMacOs->Attribute = EFI_FILE_READ_ONLY | EFI_FILE_DIRECTORY;
-          if (OcOverflowAddU64 (SIZE_OF_EFI_FILE_INFO, StrSize (Kext->BinaryFileName), &ContentsMacOs->FileSize)) {
+          if (BaseOverflowAddU64 (SIZE_OF_EFI_FILE_INFO, StrSize (Kext->BinaryFileName), &ContentsMacOs->FileSize)) {
             FreePool (ContentsInfo);
             VirtualDirFree (VirtualFileHandle);
             return EFI_INVALID_PARAMETER;
@@ -1304,7 +1334,7 @@ CachelessContextPerformInject (
           // It should be safe to assume there will only be one binary ever requested per kext?
           //
         } else if (IsBinaryKext) {
-          if (OcOverflowAddUN (L_STR_SIZE (L"\\Contents\\MacOS\\"), StrSize (Kext->BinaryFileName), &BundleBinaryPathSize)) {
+          if (BaseOverflowAddUN (L_STR_SIZE (L"\\Contents\\MacOS\\"), StrSize (Kext->BinaryFileName), &BundleBinaryPathSize)) {
             return EFI_OUT_OF_RESOURCES;
           }
 
@@ -1595,9 +1625,8 @@ CachelessContextHookBuiltin (
         Status = PatcherBlockKext (&Patcher);
         DEBUG ((
           EFI_ERROR (Status) ? DEBUG_WARN : DEBUG_INFO,
-          "OCAK: Cacheless blocker result for %a (%a) - %r\n",
+          "OCAK: Cacheless blocker result for %a - %r\n",
           PatchedKext->Identifier,
-          KextPatch->Patch.Comment,
           Status
           ));
       }

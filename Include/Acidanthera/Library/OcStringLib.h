@@ -43,6 +43,14 @@
 **/
 #define L_STR_SIZE_NT(String)  (sizeof (String) - sizeof (*(String)))
 
+/**
+  Ascii or Unicode string format for methods which can accept either format.
+**/
+typedef enum _OC_STRING_FORMAT {
+  OcStringFormatAscii,
+  OcStringFormatUnicode
+} OC_STRING_FORMAT;
+
 /** Check if character is printable
 
   @param[in] Char  The ascii character to check if is printable.
@@ -121,7 +129,7 @@ AsciiStrCopyToUnicode (
   );
 
 /**
-  Convert 64-bit unsigned integer to a nul-termianted hex string.
+  Convert 64-bit unsigned integer to a nul-terminated hex string.
 
   @param[out]  Buffer      Destination buffer.
   @param[in]   BufferSize  Destination buffer size in bytes.
@@ -731,6 +739,18 @@ OcReverseStringCompare (
 **/
 BOOLEAN
 OcIsSpace (
+  CHAR16  Ch
+  );
+
+/**
+  Determine if a particular character is whitespace or CHAR_NULL.
+
+  @param[in] Ch               The character to check.
+
+  @return  Returns TRUE if Ch is a whitespace character or CHAR_NULL.
+**/
+BOOLEAN
+OcIsSpaceOrNull (
   CHAR16  Ch
   );
 

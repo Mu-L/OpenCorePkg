@@ -19,12 +19,12 @@
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
+#include <Library/BaseOverflowLib.h>
 #include <Library/DebugLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/OcAppleKernelLib.h>
 #include <Library/OcCompressionLib.h>
 #include <Library/OcFileLib.h>
-#include <Library/OcGuardLib.h>
 
 #include "PrelinkedInternal.h"
 
@@ -310,7 +310,7 @@ KcInitKextFixupChains (
   // Context initialisation guarantees the command size is a multiple of 8.
   //
   STATIC_ASSERT (
-    OC_ALIGNOF (MACH_LINKEDIT_DATA_COMMAND) <= sizeof (UINT64),
+    BASE_ALIGNOF (MACH_LINKEDIT_DATA_COMMAND) <= sizeof (UINT64),
     "Alignment is not guaranteed."
     );
 
@@ -325,7 +325,7 @@ KcInitKextFixupChains (
   //
   ASSERT ((Context->LinkEditSegment->Segment64.FileOffset % MACHO_PAGE_SIZE) == 0);
   STATIC_ASSERT (
-    OC_TYPE_ALIGNED (MACHO_DYLD_CHAINED_FIXUPS_HEADER, MACHO_PAGE_SIZE),
+    BASE_TYPE_ALIGNED (MACHO_DYLD_CHAINED_FIXUPS_HEADER, MACHO_PAGE_SIZE),
     "Alignment is not guaranteed."
     );
 
@@ -335,7 +335,7 @@ KcInitKextFixupChains (
      || (DyldChainedFixups->DataOffset < Context->LinkEditSegment->Segment64.FileOffset)
      || ((Context->LinkEditSegment->Segment64.FileOffset + Context->LinkEditSegment->Segment64.FileSize)
          - DyldChainedFixups->DataOffset < DyldChainedFixups->DataSize)
-     || !OC_TYPE_ALIGNED (MACHO_DYLD_CHAINED_FIXUPS_HEADER, DyldChainedFixups->DataOffset))
+     || !BASE_TYPE_ALIGNED (MACHO_DYLD_CHAINED_FIXUPS_HEADER, DyldChainedFixups->DataOffset))
   {
     DEBUG ((DEBUG_WARN, "ChainedFixups insane\n"));
     return EFI_UNSUPPORTED;
@@ -349,7 +349,7 @@ KcInitKextFixupChains (
   }
 
   STATIC_ASSERT (
-    OC_ALIGNOF (MACHO_DYLD_CHAINED_FIXUPS_HEADER) >= OC_ALIGNOF (MACH_DYLD_CHAINED_STARTS_IN_IMAGE),
+    BASE_ALIGNOF (MACHO_DYLD_CHAINED_FIXUPS_HEADER) >= BASE_ALIGNOF (MACH_DYLD_CHAINED_STARTS_IN_IMAGE),
     "Alignment is not guaranteed."
     );
 
@@ -360,7 +360,7 @@ KcInitKextFixupChains (
 
   if (  (DyldChainedFixupsHdr->StartsOffset < sizeof (MACHO_DYLD_CHAINED_FIXUPS_HEADER))
      || (DyldChainedFixupsHdr->StartsOffset > DyldChainedFixups->DataSize - sizeof (MACH_DYLD_CHAINED_STARTS_IN_IMAGE))
-     || !OC_TYPE_ALIGNED (MACH_DYLD_CHAINED_STARTS_IN_IMAGE, DyldChainedFixupsHdr->StartsOffset))
+     || !BASE_TYPE_ALIGNED (MACH_DYLD_CHAINED_STARTS_IN_IMAGE, DyldChainedFixupsHdr->StartsOffset))
   {
     DEBUG ((DEBUG_WARN, "ChainedFixupsHdr insane\n"));
     return EFI_UNSUPPORTED;
@@ -370,7 +370,7 @@ KcInitKextFixupChains (
                                                                     (UINTN)DyldChainedFixupsHdr + DyldChainedFixupsHdr->StartsOffset
                                                                     );
 
-  Result = OcOverflowMulAddU32 (
+  Result = BaseOverflowMulAddU32 (
              DyldChainedStarts->NumSegments,
              sizeof (*DyldChainedStarts->SegInfoOffset),
              sizeof (*DyldChainedStarts),
@@ -565,6 +565,7 @@ KcKextIndexFixups (
   CONST MACH_SEGMENT_COMMAND_64  *FirstSegment;
   MACH_HEADER_64                 *MachHeader;
   CONST MACH_RELOCATION_INFO     *Relocations;
+  VOID                           *FileData;
   UINT32                         RelocIndex;
 
   ASSERT (Context != NULL);
@@ -616,8 +617,9 @@ KcKextIndexFixups (
   //
   // Convert all relocations to fixups.
   //
+  FileData    = MachoGetFileData (MachContext);
   Relocations = (MACH_RELOCATION_INFO *)(
-                                         (UINTN)MachHeader + DySymtab->LocalRelocationsOffset
+                                         (UINTN)FileData + DySymtab->LocalRelocationsOffset
                                          );
 
   DEBUG ((
@@ -643,14 +645,11 @@ KcGetKextSize (
   IN UINT64             SourceAddress
   )
 {
-  MACH_HEADER_64           *KcHeader;
   MACH_SEGMENT_COMMAND_64  *Segment;
 
   ASSERT (Context != NULL);
   ASSERT (Context->IsKernelCollection);
 
-  KcHeader = MachoGetMachHeader64 (&Context->PrelinkedMachContext);
-  ASSERT (KcHeader != NULL);
   //
   // Find the KC segment that contains the KEXT at SourceAddress.
   //
@@ -683,8 +682,9 @@ KcGetKextSize (
 
 EFI_STATUS
 KcKextApplyFileDelta (
-  IN OUT OC_MACHO_CONTEXT  *Context,
-  IN     UINT32            Delta
+  IN     PRELINKED_CONTEXT  *PrelinkedContext,
+  IN OUT OC_MACHO_CONTEXT   *Context,
+  IN     UINT32             Delta
   )
 {
   MACH_HEADER_64           *KextHeader;
@@ -695,6 +695,7 @@ KcKextApplyFileDelta (
   MACH_DYSYMTAB_COMMAND    *DySymtab;
   UINT32                   SectIndex;
 
+  ASSERT (PrelinkedContext != NULL);
   ASSERT (Context != NULL);
   ASSERT (Delta > 0);
 
@@ -786,9 +787,11 @@ KcKextApplyFileDelta (
 
   //
   // Update the container offset to make sure we can link against this
-  // kext later as well.
+  // kext later as well. Context->InnerSize remains unchanged and is the actual
+  // size of the kext.
   //
-  Context->ContainerOffset = Delta;
+  Context->FileData = PrelinkedContext->Prelinked;
+  Context->FileSize = PrelinkedContext->PrelinkedSize;
 
   return EFI_SUCCESS;
 }

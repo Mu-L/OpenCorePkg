@@ -56,13 +56,14 @@ InternalCreatePrelinkedKext (
   UINT64                    VirtualKmod;
   UINT64                    SourceBase;
   UINT64                    SourceSize;
+  UINT32                    InnerSize;
   UINT64                    CalculatedSourceSize;
   UINT64                    SourceEnd;
   MACH_SEGMENT_COMMAND_ANY  *BaseSegment;
   UINT64                    KxldState;
   UINT64                    KxldOffset;
   UINT32                    KxldStateSize;
-  UINT32                    ContainerOffset;
+  UINT32                    HeaderOffset;
   BOOLEAN                   Found;
   BOOLEAN                   HasExe;
   BOOLEAN                   IsKpi;
@@ -207,16 +208,25 @@ InternalCreatePrelinkedKext (
     }
 
     SourceBase -= Prelinked->Is32Bit ? BaseSegment->Segment32.VirtualAddress : BaseSegment->Segment64.VirtualAddress;
-    if (  OcOverflowAddU64 (SourceBase, Prelinked->Is32Bit ? BaseSegment->Segment32.FileOffset : BaseSegment->Segment64.FileOffset, &SourceBase)
-       || OcOverflowAddU64 (SourceBase, SourceSize, &SourceEnd)
+    if (  BaseOverflowAddU64 (SourceBase, Prelinked->Is32Bit ? BaseSegment->Segment32.FileOffset : BaseSegment->Segment64.FileOffset, &SourceBase)
+       || BaseOverflowAddU64 (SourceBase, SourceSize, &SourceEnd)
        || (SourceEnd > Prelinked->PrelinkedSize))
     {
       return NULL;
     }
 
-    ContainerOffset = 0;
+    HeaderOffset = 0;
+    InnerSize    = (UINT32)SourceSize;
     if (Prelinked->IsKernelCollection) {
-      ContainerOffset = (UINT32)SourceBase;
+      HeaderOffset = (UINT32)SourceBase;
+
+      //
+      // The Mach-O image is the entire Kernel Collection image. This is because
+      // as of macOS 13 Developer Beta 3, the inner kernel Mach-O references
+      // segments that preceed it.
+      //
+      SourceBase = 0;
+      SourceSize = Prelinked->PrelinkedSize;
     }
   }
 
@@ -230,7 +240,7 @@ InternalCreatePrelinkedKext (
 
   if (  (Prelinked != NULL)
      && HasExe
-     && !MachoInitializeContext (&NewKext->Context.MachContext, &Prelinked->Prelinked[SourceBase], (UINT32)SourceSize, ContainerOffset, Prelinked->Is32Bit))
+     && !MachoInitializeContext (&NewKext->Context.MachContext, &Prelinked->Prelinked[SourceBase], (UINT32)SourceSize, HeaderOffset, InnerSize, Prelinked->Is32Bit))
   {
     FreePool (NewKext);
     return NULL;
@@ -514,7 +524,7 @@ InternalScanBuildLinkedVtables (
                    VtableLookups[Index].Vtable.Value,
                    &VtableMaxSize
                    );
-    if ((VtableData == NULL) || (Context->Is32Bit ? !OC_TYPE_ALIGNED (UINT32, VtableData) : !OC_TYPE_ALIGNED (UINT64, VtableData))) {
+    if ((VtableData == NULL) || (Context->Is32Bit ? !BASE_TYPE_ALIGNED (UINT32, VtableData) : !BASE_TYPE_ALIGNED (UINT64, VtableData))) {
       return EFI_UNSUPPORTED;
     }
 
@@ -530,13 +540,13 @@ InternalScanBuildLinkedVtables (
 
     VtableLookups[Index].Vtable.Data = VtableData;
 
-    if (OcOverflowAddU32 (NumEntries, NumEntriesTemp, &NumEntries)) {
+    if (BaseOverflowAddU32 (NumEntries, NumEntriesTemp, &NumEntries)) {
       return EFI_OUT_OF_RESOURCES;
     }
   }
 
-  if (  OcOverflowMulU32 (NumVtables, sizeof (*LinkedVtables), &ResultingSize)
-     || OcOverflowMulAddU32 (NumEntries, sizeof (*LinkedVtables->Entries), ResultingSize, &ResultingSize))
+  if (  BaseOverflowMulU32 (NumVtables, sizeof (*LinkedVtables), &ResultingSize)
+     || BaseOverflowMulAddU32 (NumEntries, sizeof (*LinkedVtables->Entries), ResultingSize, &ResultingSize))
   {
     return EFI_OUT_OF_RESOURCES;
   }

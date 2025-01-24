@@ -14,12 +14,12 @@
 #ifndef OC_MAIN_LIB
 #define OC_MAIN_LIB
 
+#include <Library/BaseOverflowLib.h>
 #include <Library/OcAppleKernelLib.h>
 #include <Library/OcBootManagementLib.h>
 #include <Library/OcConfigurationLib.h>
 #include <Library/OcCpuLib.h>
 #include <Library/OcCryptoLib.h>
-#include <Library/OcGuardLib.h>
 #include <Library/OcMiscLib.h>
 #include <Library/OcStringLib.h>
 #include <Library/OcStorageLib.h>
@@ -30,7 +30,7 @@
   OpenCore version reported to log and NVRAM.
   OPEN_CORE_VERSION must follow X.Y.Z format, where X.Y.Z are single digits.
 **/
-#define OPEN_CORE_VERSION  "0.8.1"
+#define OPEN_CORE_VERSION  "1.0.4"
 
 /**
   OpenCore build type reported to log and NVRAM.
@@ -53,8 +53,6 @@
 
 #define OPEN_CORE_LOG_PREFIX_PATH  L"opencore"
 
-#define OPEN_CORE_NVRAM_PATH  L"nvram.plist"
-
 #define OPEN_CORE_ACPI_PATH  L"ACPI\\"
 
 #define OPEN_CORE_UEFI_DRIVER_PATH  L"Drivers\\"
@@ -62,12 +60,6 @@
 #define OPEN_CORE_KEXT_PATH  L"Kexts\\"
 
 #define OPEN_CORE_TOOL_PATH  L"Tools\\"
-
-#define OPEN_CORE_NVRAM_ATTR  (EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS)
-
-#define OPEN_CORE_NVRAM_NV_ATTR  (EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS | EFI_VARIABLE_NON_VOLATILE)
-
-#define OPEN_CORE_INT_NVRAM_ATTR  EFI_VARIABLE_BOOTSERVICE_ACCESS
 
 /**
   Obtain cryptographic key if it was installed.
@@ -104,6 +96,22 @@ OcLoadDevPropsSupport (
   );
 
 /**
+  Load drivers.
+
+  @param[in]  Storage             OpenCore storage.
+  @param[in]  Config              OpenCore configuration.
+  @param[in]  DriversToConnect    Drivers which require later connection.
+  @param[in]  LoadEarly           If TRUE load any early phase drivers, otherwise load normal phase.
+**/
+VOID
+OcLoadDrivers (
+  IN  OC_STORAGE_CONTEXT  *Storage,
+  IN  OC_GLOBAL_CONFIG    *Config,
+  OUT EFI_HANDLE          **DriversToConnect  OPTIONAL,
+  IN  BOOLEAN             LoadEarly
+  );
+
+/**
   Load Kernel compatibility support like kexts.
 
   @param[in]  Storage   OpenCore storage.
@@ -127,6 +135,20 @@ OcKernelApplyQuirk (
   IN     UINT32             DarwinVersion,
   IN OUT VOID               *Context,
   IN OUT PATCHER_CONTEXT    *KernelPatcher
+  );
+
+/**
+  Inject kexts.
+**/
+VOID
+OcKernelInjectKexts (
+  IN OC_GLOBAL_CONFIG   *Config,
+  IN KERNEL_CACHE_TYPE  CacheType,
+  IN VOID               *Context,
+  IN UINT32             DarwinVersion,
+  IN BOOLEAN            Is32Bit,
+  IN UINT32             LinkedExpansion,
+  IN UINT32             ReservedExeSize
   );
 
 /**
@@ -154,6 +176,21 @@ OcKernelBlockKexts (
   IN     BOOLEAN            Is32Bit,
   IN     KERNEL_CACHE_TYPE  CacheType,
   IN     VOID               *Context
+  );
+
+/**
+  Process prelinked.
+**/
+EFI_STATUS
+OcKernelProcessPrelinked (
+  IN     OC_GLOBAL_CONFIG  *Config,
+  IN     UINT32            DarwinVersion,
+  IN     BOOLEAN           Is32Bit,
+  IN OUT UINT8             *Kernel,
+  IN     UINT32            *KernelSize,
+  IN     UINT32            AllocatedSize,
+  IN     UINT32            LinkedExpansion,
+  IN     UINT32            ReservedExeSize
   );
 
 /**
@@ -242,11 +279,13 @@ OcLoadUefiInputSupport (
 /**
   Load UEFI output compatibility support.
 
+  @param[in]  Storage   OpenCore storage.
   @param[out] Config    OpenCore configuration.
 **/
 VOID
 OcLoadUefiOutputSupport (
-  IN OC_GLOBAL_CONFIG  *Config
+  IN OC_STORAGE_CONTEXT  *Storage,
+  IN OC_GLOBAL_CONFIG    *Config
   );
 
 /**
@@ -387,6 +426,28 @@ OcMiscUefiQuirksLoaded (
 BOOLEAN
 OcPlatformIs64BitSupported (
   IN UINT32  KernelVersion
+  );
+
+/**
+  Unload loaded images by name.
+
+  @param[in]  Config     OpenCore configuration.
+**/
+VOID
+OcUnloadDrivers (
+  IN  OC_GLOBAL_CONFIG  *Config
+  );
+
+/**
+  Dump loaded image driver info to the specified directory.
+
+  @param[in]  Root     Directory to write CPU data.
+
+  @retval EFI_SUCCESS on success.
+**/
+EFI_STATUS
+OcDriverInfoDump (
+  IN EFI_FILE_PROTOCOL  *Root
   );
 
 #endif // OC_MAIN_LIB

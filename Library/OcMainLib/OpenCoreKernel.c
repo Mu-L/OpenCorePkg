@@ -565,6 +565,7 @@ OcKernelInjectKext (
   CHAR8        FullPath[OC_STORAGE_SAFE_PATH_MAX];
   UINT32       MaxKernel;
   UINT32       MinKernel;
+  CHAR8        BundleVersion[MAX_INFO_BUNDLE_VERSION_KEY_SIZE];
 
   if (!Kext->Enabled || (Kext->PlistData == NULL)) {
     return;
@@ -575,6 +576,12 @@ OcKernelInjectKext (
   Comment    = OC_BLOB_GET (&Kext->Comment);
   MaxKernel  = OcParseDarwinVersion (OC_BLOB_GET (&Kext->MaxKernel));
   MinKernel  = OcParseDarwinVersion (OC_BLOB_GET (&Kext->MinKernel));
+
+  //
+  // Assume no bundle version from the beginning.
+  // 'v' will be printed in the message, and hence is omitted here.
+  //
+  AsciiStrCpyS (BundleVersion, MAX_INFO_BUNDLE_VERSION_KEY_SIZE, "ersion unavailable");
 
   if (!OcMatchDarwinVersion (DarwinVersion, MinKernel, MaxKernel)) {
     DEBUG ((
@@ -617,7 +624,8 @@ OcKernelInjectKext (
                  Kext->PlistData,
                  Kext->PlistDataSize,
                  Kext->ImageData,
-                 Kext->ImageDataSize
+                 Kext->ImageDataSize,
+                 BundleVersion
                  );
     }
   } else if (CacheType == CacheTypeMkext) {
@@ -628,7 +636,8 @@ OcKernelInjectKext (
                Kext->PlistData,
                Kext->PlistDataSize,
                Kext->ImageData,
-               Kext->ImageDataSize
+               Kext->ImageDataSize,
+               BundleVersion
                );
   } else if (CacheType == CacheTypePrelinked) {
     Status = PrelinkedInjectKext (
@@ -639,7 +648,8 @@ OcKernelInjectKext (
                Kext->PlistDataSize,
                ExecutablePath,
                Kext->ImageData,
-               Kext->ImageDataSize
+               Kext->ImageDataSize,
+               BundleVersion
                );
   } else {
     Status = EFI_UNSUPPORTED;
@@ -654,9 +664,23 @@ OcKernelInjectKext (
     Comment,
     Status
     ));
+
+  //
+  // Report kext bundle version for DEBUG build.
+  //
+  DEBUG_CODE_BEGIN ();
+  DEBUG ((
+    !IsForced && EFI_ERROR (Status) ? DEBUG_WARN : DEBUG_INFO,
+    "OC: %a%a injection %a v%a\n",
+    PRINT_KERNEL_CACHE_TYPE (CacheType),
+    IsForced ? " force" : "",
+    BundlePath,
+    BundleVersion
+    ));
+
+  DEBUG_CODE_END ();
 }
 
-STATIC
 VOID
 OcKernelInjectKexts (
   IN OC_GLOBAL_CONFIG   *Config,
@@ -739,7 +763,6 @@ OcKernelInjectKexts (
   }
 }
 
-STATIC
 EFI_STATUS
 OcKernelProcessPrelinked (
   IN     OC_GLOBAL_CONFIG  *Config,
@@ -880,7 +903,7 @@ OcKernelReadAppleKernel (
     return EFI_UNSUPPORTED;
   }
 
-  Result = OcOverflowTriAddU32 (
+  Result = BaseOverflowTriAddU32 (
              ReservedInfoSize,
              *ReservedExeSize,
              *LinkedExpansion,
@@ -1364,7 +1387,7 @@ OcKernelFileOpen (
       &NumReservedKexts
       );
 
-    Result = OcOverflowAddU32 (
+    Result = BaseOverflowAddU32 (
                ReservedInfoSize,
                ReservedExeSize,
                &ReservedFullSize

@@ -14,10 +14,7 @@ CpuBreakpoint (
   VOID
   )
 {
-  ASSERT (FALSE);
-
-  while (TRUE) {
-  }
+  abort ();
 }
 
 VOID
@@ -694,4 +691,12 @@ OcLocateRootVolume (
   )
 {
   return NULL;
+}
+
+UINTN
+GetSerialRegisterBase (
+  VOID
+  )
+{
+  return 0;
 }

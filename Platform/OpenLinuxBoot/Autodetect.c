@@ -182,7 +182,7 @@ CreateRootPartuuid (
     return EFI_OUT_OF_RESOURCES;
   }
 
-  NumPrinted = AsciiSPrint (*Dest, Length + 1, "%a%g", "root=PARTUUID=", gPartuuid);
+  NumPrinted = AsciiSPrint (*Dest, Length + 1, "%a%g", "root=PARTUUID=", &gPartuuid);
   ASSERT (NumPrinted == Length);
 
   //
@@ -269,7 +269,7 @@ LoadOsRelease (
         "LNX: Reading %s\n",
         OS_RELEASE_FILE
         ));
-      Status = OcParseVars (mEtcOsReleaseFileContents, &mEtcOsReleaseOptions, FALSE);
+      Status = OcParseVars (mEtcOsReleaseFileContents, &mEtcOsReleaseOptions, OcStringFormatAscii, FALSE);
       if (EFI_ERROR (Status)) {
         FreePool (mEtcOsReleaseFileContents);
         mEtcOsReleaseFileContents = NULL;
@@ -320,7 +320,7 @@ LoadDefaultGrub (
       "LNX: Reading %s\n",
       GRUB_DEFAULT_FILE
       ));
-    Status = OcParseVars (mEtcDefaultGrubFileContents, &mEtcDefaultGrubOptions, FALSE);
+    Status = OcParseVars (mEtcDefaultGrubFileContents, &mEtcDefaultGrubOptions, OcStringFormatAscii, FALSE);
     if (EFI_ERROR (Status)) {
       FreePool (mEtcDefaultGrubFileContents);
       mEtcDefaultGrubFileContents = NULL;
@@ -386,10 +386,10 @@ FreeEtcFiles (
 STATIC
 EFI_STATUS
 InsertOption (
-  IN     CONST UINTN          InsertIndex,
-  IN           OC_FLEX_ARRAY  *Options,
-  IN     CONST VOID           *Value,
-  IN     CONST BOOLEAN        IsUnicode
+  IN     CONST UINTN             InsertIndex,
+  IN           OC_FLEX_ARRAY     *Options,
+  IN     CONST VOID              *Value,
+  IN     CONST OC_STRING_FORMAT  StringFormat
   )
 {
   EFI_STATUS  Status;
@@ -397,7 +397,7 @@ InsertOption (
   UINTN       CopiedLength;
   CHAR8       **Option;
 
-  if (IsUnicode) {
+  if (StringFormat == OcStringFormatUnicode) {
     OptionsLength = StrLen (Value);
   } else {
     OptionsLength = AsciiStrLen (Value);
@@ -409,14 +409,14 @@ InsertOption (
       return EFI_OUT_OF_RESOURCES;
     }
 
-    if (IsUnicode) {
+    if (StringFormat == OcStringFormatUnicode) {
       *Option = AllocatePool ((OptionsLength + 1) * sizeof (CHAR16));
       if (*Option == NULL) {
         return EFI_OUT_OF_RESOURCES;
       }
 
       Status = UnicodeStrnToAsciiStrS (Value, OptionsLength, *Option, OptionsLength + 1, &CopiedLength);
-      ASSERT (!EFI_ERROR (Status));
+      ASSERT_EFI_ERROR (Status);
       ASSERT (CopiedLength == OptionsLength);
     } else {
       *Option = AllocateCopyPool (OptionsLength + 1, Value);
@@ -432,12 +432,12 @@ InsertOption (
 STATIC
 EFI_STATUS
 AddOption (
-  IN           OC_FLEX_ARRAY  *Options,
-  IN     CONST VOID           *Value,
-  IN     CONST BOOLEAN        IsUnicode
+  IN           OC_FLEX_ARRAY     *Options,
+  IN     CONST VOID              *Value,
+  IN     CONST OC_STRING_FORMAT  StringFormat
   )
 {
-  return InsertOption (Options->Count, Options, Value, IsUnicode);
+  return InsertOption (Options->Count, Options, Value, StringFormat);
 }
 
 EFI_STATUS
@@ -450,7 +450,7 @@ InsertRootOption (
   DEBUG ((
     (gLinuxBootFlags & LINUX_BOOT_LOG_VERBOSE) == 0 ? DEBUG_VERBOSE : DEBUG_INFO,
     "LNX: Creating \"root=PARTUUID=%g\"\n",
-    gPartuuid
+    &gPartuuid
     ));
 
   NewOption = OcFlexArrayInsertItem (Options, 0);
@@ -589,7 +589,7 @@ AutodetectBootOptions (
       "",
       mCurrentPartuuidAutoOpts
       ));
-    Status = AddOption (Options, mCurrentPartuuidAutoOpts, TRUE);
+    Status = AddOption (Options, mCurrentPartuuidAutoOpts, OcStringFormatUnicode);
     return Status;
   }
 
@@ -601,7 +601,7 @@ AutodetectBootOptions (
       "+",
       mCurrentPartuuidAutoOptsPlus
       ));
-    Status = AddOption (Options, mCurrentPartuuidAutoOptsPlus, TRUE);
+    Status = AddOption (Options, mCurrentPartuuidAutoOptsPlus, OcStringFormatUnicode);
     if (EFI_ERROR (Status)) {
       return Status;
     }
@@ -620,7 +620,7 @@ AutodetectBootOptions (
       mGlobalAutoOpts
       ));
 
-    Status = AddOption (Options, mGlobalAutoOpts, TRUE);
+    Status = AddOption (Options, mGlobalAutoOpts, OcStringFormatUnicode);
     return Status;
   } else if (mGlobalAutoOptsPlus) {
     DEBUG ((
@@ -630,7 +630,7 @@ AutodetectBootOptions (
       mGlobalAutoOptsPlus
       ));
 
-    Status = AddOption (Options, mGlobalAutoOptsPlus, TRUE);
+    Status = AddOption (Options, mGlobalAutoOptsPlus, OcStringFormatUnicode);
     if (EFI_ERROR (Status)) {
       return Status;
     }
@@ -682,7 +682,7 @@ AutodetectBootOptions (
           ));
 
         if (AsciiStrValue[0] != '\0') {
-          Status = InsertOption (InsertIndex, Options, AsciiStrValue, FALSE);
+          Status = InsertOption (InsertIndex, Options, AsciiStrValue, OcStringFormatAscii);
           if (EFI_ERROR (Status)) {
             return Status;
           }
@@ -744,7 +744,7 @@ AutodetectBootOptions (
       "LNX: Adding \"%a\"\n",
       AddRxOption
       ));
-    Status = InsertOption (InsertIndex, Options, AddRxOption, FALSE);
+    Status = InsertOption (InsertIndex, Options, AddRxOption, OcStringFormatAscii);
   }
 
   return Status;

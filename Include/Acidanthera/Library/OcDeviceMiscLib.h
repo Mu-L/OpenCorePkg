@@ -29,15 +29,6 @@ ReleaseUsbOwnership (
   );
 
 /**
-  Perform cold reboot directly bypassing UEFI services. Does not return.
-  Supposed to work in any modern physical or virtual environment.
-**/
-VOID
-DirectResetCold (
-  VOID
-  );
-
-/**
   Reset HDA TCSEL to TC0 state.
 **/
 VOID
@@ -82,11 +73,17 @@ OcPciInfoDump (
 /**
   Upgrade UEFI version to 2.x.
 
+  @param[in]      Forge     If TRUE forge, else just report status.
+  @param[in]      Trash     If TRUE trash gBS->CreateEventEx directly, else reallocate gBS.
+                            Reallocate strategy will only affect current image and any images
+                            it loads. Trash strategy should affect all images.
+
   @retval EFI_SUCCESS on success.
 **/
 EFI_STATUS
 OcForgeUefiSupport (
-  VOID
+  IN BOOLEAN  Forge,
+  IN BOOLEAN  Trash
   );
 
 /**
@@ -143,7 +140,8 @@ typedef enum {
 EFI_STATUS
 ResizeGpuBars (
   IN PCI_BAR_SIZE  Size,
-  IN BOOLEAN       Increase
+  IN BOOLEAN       Increase,
+  IN BOOLEAN       UseRbIo
   );
 
 //

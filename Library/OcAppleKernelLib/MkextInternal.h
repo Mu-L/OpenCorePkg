@@ -62,10 +62,34 @@ typedef struct {
     MKEXT_KEXT_SIGNATURE                \
     ))
 
+VOID
+InternalDropCachedMkextKext (
+  IN OUT MKEXT_CONTEXT  *Context,
+  IN     CONST CHAR8    *Identifier
+  );
+
+EFI_STATUS
+InternalGetMkextV1KextOffsets (
+  IN OUT MKEXT_CONTEXT  *Context,
+  IN     CONST CHAR8    *Identifier,
+  OUT UINT32            *KextIndex,
+  OUT UINT32            *KextPlistOffset,
+  OUT UINT32            *KextPlistSize,
+  OUT UINT32            *KextBinOffset,
+  OUT UINT32            *KextBinSize
+  );
+
 MKEXT_KEXT *
 InternalCachedMkextKext (
   IN OUT MKEXT_CONTEXT  *Context,
   IN     CONST CHAR8    *BundleId
+  );
+
+BOOLEAN
+InternalParseKextBinary (
+  IN OUT UINT8    **Buffer,
+  IN OUT UINT32   *BufferSize,
+  IN     BOOLEAN  Is32Bit
   );
 
 #endif // MKEXT_INTERNAL_H

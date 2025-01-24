@@ -52,6 +52,7 @@ Utility to validate whether a `config.plist` matches requirements and convention
 - Entry[N]->BundlePath: Filename should have `.kext` suffix.
 - Entry[N]->PlistPath: Filename should have `.plist` suffix.
 - Entry[N]: If `Lilu.kext` is used, `DisableLinkeditJettison` should be enabled in `Kernel->Quirks`.
+- `BrcmFirmwareRepo.kext` must not be injected by OpenCore.
 - For some known kexts, their `BundlePath`, `ExecutablePath`, and `PlistPath` must match against each other. Current list of rules can be found [here](https://github.com/acidanthera/OpenCorePkg/blob/master/Utilities/ocvalidate/KextInfo.c).
 - Plugin kext must be placed after parent kext. For example, [plugins of Lilu](https://github.com/acidanthera/Lilu/blob/master/KnownPlugins.md) must be placed after `Lilu.kext`.
 #### Delete
@@ -125,6 +126,9 @@ Utility to validate whether a `config.plist` matches requirements and convention
 - `OpenUsbKbDxe.efi` and `Ps2KeyboardDxe.efi` should never co-exist.
 - When HFS+ filesystem driver or `AudioDxe.efi` is in use, `ConnectDrivers` should be enabled altogether.
 - When `OpenCanopy.efi` is in use, `PickerMode` in `Misc->Boot` should be set to `External`.
+- When `OpenVariableRuntimeDxe.efi` is in use, its `LoadEarly` option must be set to `TRUE`.
+- `OpenRuntime.efi` must be placed after `OpenVariableRuntimeDxe.efi` when both are in use.
+- `LoadEarly` for any other driver but `OpenVariableRuntimeDxe.efi` and `OpenRuntime.efi` must be set to `FALSE`.
 #### Input
 - KeySupportMode: Only `Auto`, `V1`, `V2`, or `AMI` are accepted.
 - When `PointerSupport` is enabled, the value of `PointerSupportMode` should only be `ASUS`.

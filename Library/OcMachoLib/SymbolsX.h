@@ -235,7 +235,7 @@ MACH_X (
   Base   = Segment->FileOffset;
   Size   = Segment->Size;
 
-  *FileOffset = MACH_X_TO_UINT32 (Base - Context->ContainerOffset + Offset);
+  *FileOffset = MACH_X_TO_UINT32 (Base + Offset);
 
   if (MaxSize != NULL) {
     *MaxSize = MACH_X_TO_UINT32 (Size - Offset);
@@ -456,7 +456,7 @@ MACH_X (
   ASSERT (Context != NULL);
   MACH_ASSERT_X (Context);
 
-  Result = MACH_X (OcOverflowAddU)(Address, sizeof (MACH_UINT_X), &AddressTop);
+  Result = MACH_X (BaseOverflowAddU)(Address, sizeof (MACH_UINT_X), &AddressTop);
   if (Result || (AddressTop > MachoGetFileSize (Context))) {
     return FALSE;
   }
@@ -479,7 +479,7 @@ MACH_X (
       return FALSE;
     }
 
-    if (OC_TYPE_ALIGNED (MACH_UINT_X, Tmp)) {
+    if (BASE_TYPE_ALIGNED (MACH_UINT_X, Tmp)) {
       Data = (MACH_UINT_X *)Tmp;
 
       // FIXME: Only C++ symbols.
@@ -589,7 +589,7 @@ MACH_X (
       return FALSE;
     }
 
-    Result = MACH_X (OcOverflowAddU)(Symbol->Value, Value, &Value);
+    Result = MACH_X (BaseOverflowAddU)(Symbol->Value, Value, &Value);
     if (Result) {
       return FALSE;
     }
@@ -662,7 +662,7 @@ MACH_X (
     }
   }
 
-  *FileOffset = MACH_X_TO_UINT32 (Base - Context->ContainerOffset + Offset);
+  *FileOffset = MACH_X_TO_UINT32 (Base + Offset);
 
   if (MaxSize != NULL) {
     *MaxSize = MACH_X_TO_UINT32 (Size - Offset);

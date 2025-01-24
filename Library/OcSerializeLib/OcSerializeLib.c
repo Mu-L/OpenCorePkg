@@ -20,8 +20,6 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <Library/BaseLib.h>
 #include <Library/DebugLib.h>
 
-#if !defined (MDEPKG_NDEBUG)
-
 STATIC
 CONST CHAR8 *
   mSchemaTypeNames[] = {
@@ -44,8 +42,6 @@ GetSchemaTypeName (
 
   return "custom";
 }
-
-#endif
 
 OC_SCHEMA *
 LookupConfigSchema (

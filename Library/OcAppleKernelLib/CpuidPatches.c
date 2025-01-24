@@ -23,6 +23,78 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <Library/OcStringLib.h>
 #include <Library/UefiLib.h>
 
+//
+// CPUID EAX=0x2 Cache descriptor values
+//
+STATIC
+CONST struct {
+  UINT8           value;
+  cache_type_t    type;
+  UINT32          size;
+  UINT8           associativity;
+  UINT8           linesize;
+  UINT8           partitions;
+} mCpuCacheDescriptorValues[] = {
+  { 0x06, L1I, SIZE_8KB,               4,  32, 1 },
+  { 0x08, L1I, SIZE_16KB,              4,  32, 1 },
+  { 0x0A, L1D, SIZE_8KB,               2,  32, 1 },
+  { 0x0C, L1D, SIZE_16KB,              4,  32, 1 },
+  { 0x0E, L1D, 24*SIZE_1KB,            6,  64, 1 },
+  { 0x22, L3U, SIZE_512KB,             4,  64, 2 },
+  { 0x23, L3U, SIZE_1MB,               8,  64, 2 },
+  { 0x25, L3U, SIZE_2MB,               8,  64, 2 },
+  { 0x29, L3U, SIZE_4MB,               8,  64, 2 },
+  { 0x2C, L1D, SIZE_32KB,              8,  64, 2 },
+  { 0x30, L1I, SIZE_32KB,              8,  64, 1 },
+  { 0x41, L2U, SIZE_128KB,             4,  32, 1 },
+  { 0x42, L2U, SIZE_256KB,             4,  32, 1 },
+  { 0x43, L2U, SIZE_512KB,             4,  32, 1 },
+  { 0x44, L2U, SIZE_1MB,               4,  32, 1 },
+  { 0x45, L2U, SIZE_2MB,               4,  32, 1 },
+  { 0x46, L3U, SIZE_4MB,               4,  64, 1 },
+  { 0x47, L3U, SIZE_8MB,               8,  64, 1 },
+  { 0x48, L2U, 3*SIZE_1MB,             12, 64, 1 },
+  { 0x49, L2U, SIZE_4MB,               16, 64, 1 }, // for Xeons family Fh model 6h it's L3U instead
+  { 0x4A, L3U, 6*SIZE_1MB,             12, 64, 1 },
+  { 0x4B, L3U, SIZE_8MB,               16, 64, 1 },
+  { 0x4C, L3U, 12*SIZE_1MB,            12, 64, 1 },
+  { 0x4D, L3U, SIZE_16MB,              16, 64, 1 },
+  { 0x4E, L2U, 6*SIZE_1MB,             24, 64, 1 },
+  { 0x60, L1D, SIZE_16KB,              8,  64, 1 },
+  { 0x66, L1D, SIZE_8KB,               4,  64, 1 },
+  { 0x67, L1D, SIZE_16KB,              4,  64, 1 },
+  { 0x68, L1D, SIZE_32KB,              4,  64, 1 },
+  { 0x78, L2U, SIZE_1MB,               4,  64, 1 },
+  { 0x79, L2U, SIZE_128KB,             8,  64, 2 },
+  { 0x7A, L2U, SIZE_256KB,             8,  64, 2 },
+  { 0x7B, L2U, SIZE_512KB,             8,  64, 2 },
+  { 0x7C, L2U, SIZE_1MB,               8,  64, 2 },
+  { 0x7D, L2U, SIZE_2MB,               8,  64, 1 },
+  { 0x7F, L2U, SIZE_512KB,             2,  64, 1 },
+  { 0x80, L2U, SIZE_512KB,             8,  64, 1 },
+  { 0x82, L2U, SIZE_256KB,             8,  32, 1 },
+  { 0x83, L2U, SIZE_512KB,             8,  32, 1 },
+  { 0x84, L2U, SIZE_1MB,               8,  32, 1 },
+  { 0x85, L2U, SIZE_2MB,               8,  32, 1 },
+  { 0x86, L2U, SIZE_512KB,             4,  64, 1 },
+  { 0x87, L2U, SIZE_1MB,               8,  64, 1 },
+  { 0xD0, L3U, SIZE_512KB,             4,  64, 1 },
+  { 0xD1, L3U, SIZE_1MB,               4,  64, 1 },
+  { 0xD2, L3U, SIZE_2MB,               4,  64, 1 },
+  { 0xD6, L3U, SIZE_1MB,               8,  64, 1 },
+  { 0xD7, L3U, SIZE_2MB,               8,  64, 1 },
+  { 0xD8, L3U, SIZE_4MB,               8,  64, 1 },
+  { 0xDC, L3U, (UINT32)(1.5*SIZE_1MB), 12, 64, 1 },
+  { 0xDD, L3U, 3*SIZE_1MB,             12, 64, 1 },
+  { 0xDE, L3U, 6*SIZE_1MB,             12, 64, 1 },
+  { 0xE2, L3U, SIZE_2MB,               16, 64, 1 },
+  { 0xE3, L3U, SIZE_4MB,               16, 64, 1 },
+  { 0xE4, L3U, SIZE_8MB,               16, 64, 1 },
+  { 0xEA, L3U, 12*SIZE_1MB,            24, 64, 1 },
+  { 0xEB, L3U, 18*SIZE_1MB,            24, 64, 1 },
+  { 0xEC, L3U, 24*SIZE_1MB,            24, 64, 1 }
+};
+
 STATIC
 CONST UINT8
   mKernelCpuIdFindRelNew[] = {
@@ -81,8 +153,8 @@ CONST UINT8
   0x48, 0xB8, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x88, // mov rax, 8888888888888888h
   0x48, 0x89, 0x47, 0x58,                                     // mov [rdi+58h], rax
   0xC7, 0x87, 0xCC, 0x00, 0x00, 0x00, 0x99, 0x99, 0x99, 0x99, // mov dword ptr [rdi+0CCh], 99999999h
-  0xC7, 0x87, 0x88, 0x01, 0x00, 0x00, 0xAA, 0xAA, 0xAA, 0xAA, // mov dword ptr [rdi+188h], 0AAAAAAAAh
-  0xB8, 0xAA, 0xAA, 0xAA, 0xAA,                               // mov eax, 0AAAAAAAAh
+  0xC7, 0x87, 0x88, 0x01, 0x00, 0x00, 0xAA, 0xAA, 0xAA, 0xAA, // mov dword ptr [rdi+188h], AAAAAAAAh
+  0xB8, 0xAA, 0xAA, 0xAA, 0xAA,                               // mov eax, AAAAAAAAh
   0xC3                                                        // retn
 };
 
@@ -154,9 +226,9 @@ PatchKernelCpuIdLegacy (
   UINT32                StructAddr;
   UINT8                 *Location;
   UINT8                 *LocationEnd;
-  UINT8                 *LocationTsc;
-  UINT8                 *LocationTscEnd;
   UINT8                 *LocationSnow32;
+  UINT8                 *LocationTigerTsc;
+  UINT8                 *LocationTigerTscEnd;
   UINT32                Signature[3];
   BOOLEAN               IsTiger;
   BOOLEAN               IsTigerOld;
@@ -178,9 +250,9 @@ PatchKernelCpuIdLegacy (
   IsLion     = OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_LION_MIN, KERNEL_VERSION_LION_MAX);
   StructAddr = 0;
 
-  LocationSnow32 = NULL;
-  LocationTsc    = NULL;
-  LocationTscEnd = NULL;
+  LocationSnow32      = NULL;
+  LocationTigerTsc    = NULL;
+  LocationTigerTscEnd = NULL;
 
   //
   // Locate _cpuid_set_info or _cpuid_get_info.
@@ -188,7 +260,7 @@ PatchKernelCpuIdLegacy (
   //
   Status = PatcherGetSymbolAddress (Patcher, IsTiger ? "_cpuid_get_info" : "_cpuid_set_info", (UINT8 **)&Record);
   if (EFI_ERROR (Status) || (Record >= Last)) {
-    DEBUG ((DEBUG_WARN, "OCAK: Failed to locate _cpuid_%a_info (%p) - %r\n", IsTiger ? "get" : "set", Record, Status));
+    DEBUG ((DEBUG_WARN, "OCAK: [FAIL] Failed to locate _cpuid_%a_info (%p) - %r\n", IsTiger ? "get" : "set", Record, Status));
     return EFI_NOT_FOUND;
   }
 
@@ -245,7 +317,7 @@ PatchKernelCpuIdLegacy (
       //
       Status = PatcherGetSymbolAddress (Patcher, IsLion ? "_bzero" : "_blkclr", (UINT8 **)&BlockClearFunc);
       if (EFI_ERROR (Status) || (Record >= Last)) {
-        DEBUG ((DEBUG_WARN, "OCAK: Failed to locate %a (%p) - %r\n", IsLion ? "_bzero" : "_blkclr", Record, Status));
+        DEBUG ((DEBUG_WARN, "OCAK: [FAIL] Failed to locate %a (%p) - %r\n", IsLion ? "_bzero" : "_blkclr", Record, Status));
         return EFI_NOT_FOUND;
       }
 
@@ -531,13 +603,13 @@ PatchKernelCpuIdLegacy (
   // This only applies to XNU 8.10.1 and older. Some recovery versions of
   // 10.4.10 have a newer XNU 8.10.3 kernel with code changes to _tsc_init.
   //
-  // It's possible 8.10.2 may require the patch, but there is no sources or kernels
+  // It's possible 8.10.2 may require the patch, but there are no sources or kernels
   // available to verify.
   //
   if (IsTigerOld) {
     Status = PatcherGetSymbolAddress (Patcher, "_tsc_init", (UINT8 **)&Record);
     if (EFI_ERROR (Status) || (Record >= Last)) {
-      DEBUG ((DEBUG_WARN, "OCAK: Failed to locate _tsc_init (%p) - %r\n", Record, Status));
+      DEBUG ((DEBUG_WARN, "OCAK: [FAIL] Failed to locate _tsc_init (%p) - %r\n", Record, Status));
       return EFI_NOT_FOUND;
     }
 
@@ -552,7 +624,7 @@ PatchKernelCpuIdLegacy (
       0x89, 0xD0                          // mov eax, edx
     };
 
-    for ( ; Index < EFI_PAGE_SIZE; Index++, Record++) {
+    for (Index = 0; Index < EFI_PAGE_SIZE; Index++, Record++) {
       if (  (Record[0] == mKernelCpuidFindTscLocTigerStart[0])
          && (Record[1] == mKernelCpuidFindTscLocTigerStart[1])
          && (Record[2] == mKernelCpuidFindTscLocTigerStart[2])
@@ -569,7 +641,7 @@ PatchKernelCpuIdLegacy (
       return EFI_NOT_FOUND;
     }
 
-    LocationTsc = Record;
+    LocationTigerTsc = Record;
 
     //
     // End of _tsc_init CPUID location.
@@ -587,18 +659,18 @@ PatchKernelCpuIdLegacy (
       return EFI_NOT_FOUND;
     }
 
-    LocationTscEnd = Record + 2;
+    LocationTigerTscEnd = Record + 2;
   }
 
   DEBUG ((
     DEBUG_INFO,
-    "OCAK: Legacy CPUID patch %p:%p, loc %p:%p, tsc loc %p:%p struct @ 0x%X\n",
+    "OCAK: Legacy CPUID patch %p:%p, loc %p:%p, tsc loc %p:%p, struct @ 0x%X\n",
     StartPointer - Start,
     EndPointer - Start,
     Location - Start,
     LocationEnd - Start,
-    IsTigerOld ? LocationTsc - Start : 0,
-    IsTigerOld ? LocationTscEnd - Start : 0,
+    IsTigerOld ? LocationTigerTsc - Start : 0,
+    IsTigerOld ? LocationTigerTscEnd - Start : 0,
     StructAddr
     ));
 
@@ -712,12 +784,12 @@ PatchKernelCpuIdLegacy (
   // the patch area like above in _tsc_init.
   //
   if (IsTigerOld) {
-    Delta          = (INT32)(StartPointer - (LocationTsc + 5));
-    *LocationTsc++ = 0xE8;
-    CopyMem (LocationTsc, &Delta, sizeof (Delta));
-    LocationTsc += sizeof (Delta);
-    while (LocationTsc < LocationTscEnd) {
-      *LocationTsc++ = 0x90;
+    Delta               = (INT32)(StartPointer - (LocationTigerTsc + 5));
+    *LocationTigerTsc++ = 0xE8;
+    CopyMem (LocationTigerTsc, &Delta, sizeof (Delta));
+    LocationTigerTsc += sizeof (Delta);
+    while (LocationTigerTsc < LocationTigerTscEnd) {
+      *LocationTigerTsc++ = 0x90;
     }
   }
 
@@ -771,7 +843,7 @@ PatchKernelCpuIdLegacy (
   //
   *StartPointer++ = 0xC3;
 
-  DEBUG ((DEBUG_INFO, "OCAK: Legacy CPUID patch completed @ %p\n", StartPointer - Start));
+  DEBUG ((DEBUG_INFO, "OCAK: [OK] Legacy CPUID patch completed @ %p\n", StartPointer - Start));
   return EFI_SUCCESS;
 }
 
@@ -815,7 +887,7 @@ PatchKernelCpuId (
     );
 
   Start = ((UINT8 *)MachoGetMachHeader (&Patcher->MachContext));
-  Last  = Start + MachoGetFileSize (&Patcher->MachContext) - EFI_PAGE_SIZE * 2 - sizeof (mKernelCpuIdFindRelNew);
+  Last  = Start + MachoGetInnerSize (&Patcher->MachContext) - EFI_PAGE_SIZE * 2 - sizeof (mKernelCpuIdFindRelNew);
 
   //
   // Do legacy patching for 32-bit 10.7, and 10.6 and older.
@@ -825,7 +897,7 @@ PatchKernelCpuId (
   {
     Status = PatchKernelCpuIdLegacy (Patcher, KernelVersion, CpuInfo, Data, DataMask, Start, Last);
     if (EFI_ERROR (Status)) {
-      DEBUG ((DEBUG_WARN, "OCAK: Failed to patch legacy CPUID - %r\n", Status));
+      DEBUG ((DEBUG_WARN, "OCAK: [FAIL] Failed to patch legacy CPUID - %r\n", Status));
     }
 
     return Status;
@@ -833,7 +905,7 @@ PatchKernelCpuId (
 
   Status = PatcherGetSymbolAddress (Patcher, "_cpuid_set_info", (UINT8 **)&CpuidSetInfo);
   if (EFI_ERROR (Status) || (CpuidSetInfo >= Last)) {
-    DEBUG ((DEBUG_WARN, "OCAK: Failed to locate _cpuid_set_info (%p) - %r\n", CpuidSetInfo, Status));
+    DEBUG ((DEBUG_WARN, "OCAK: [FAIL] Failed to locate _cpuid_set_info (%p) - %r\n", CpuidSetInfo, Status));
     return EFI_NOT_FOUND;
   }
 
@@ -908,6 +980,8 @@ PatchKernelCpuId (
           sizeof (mKernelCpuidFindMcRel) - sizeof (INTERNAL_MICROCODE_PATCH),
           0x90
           );
+
+        DEBUG ((DEBUG_INFO, "OCAK: [OK] Patch success CPUID release\n"));
         return EFI_SUCCESS;
       }
     }
@@ -917,7 +991,7 @@ PatchKernelCpuId (
     //
     Status = PatcherGetSymbolAddress (Patcher, "_cpuid_set_cpufamily", (UINT8 **)&Record);
     if (EFI_ERROR (Status) || (Record >= Last)) {
-      DEBUG ((DEBUG_WARN, "OCAK: Failed to locate _cpuid_set_cpufamily (%p) - %r\n", Record, Status));
+      DEBUG ((DEBUG_WARN, "OCAK: [FAIL] Failed to locate _cpuid_set_cpufamily (%p) - %r\n", Record, Status));
       return EFI_NOT_FOUND;
     }
 
@@ -939,10 +1013,11 @@ PatchKernelCpuId (
 
     FnPatch->AppleFamily1 = FnPatch->AppleFamily2 = OcCpuModelToAppleFamily (Eax);
 
+    DEBUG ((DEBUG_INFO, "OCAK: [OK] Patch success CPUID debug\n"));
     return EFI_SUCCESS;
   }
 
-  DEBUG ((DEBUG_WARN, "OCAK: Failed to find either CPUID patch (%u)\n", FoundSize));
+  DEBUG ((DEBUG_WARN, "OCAK: [FAIL] Failed to find either CPUID patch (%u)\n", FoundSize));
 
   return EFI_UNSUPPORTED;
 }
@@ -1004,30 +1079,32 @@ PATCHER_GENERIC_PATCH
 STATIC
 UINT8 *
 PatchMovVar (
-  IN OUT  UINT8             *Location,
-  IN      UINT8             *Start,
-  IN      MACH_SECTION_ANY  *DataSection,
-  IN      MACH_SECTION_ANY  *TextSection,
-  IN      BOOLEAN           Is32Bit,
-  IN      UINT8             *Var,
-  IN      UINT64            Value
+  IN OUT  UINT8    *Location,
+  IN      BOOLEAN  Is32Bit,
+  IN OUT  UINT64   *FuncAddr,
+  IN      UINT64   VarSymAddr,
+  IN      UINT64   Value
   )
 {
+  UINT8   *Start;
   INT32   Delta;
-  UINT64  LocationAddr;
-  UINT64  VarAddr64;
   UINT32  VarAddr32;
   UINT32  ValueLower;
   UINT32  ValueUpper;
+
+  Start = Location;
+  DEBUG ((DEBUG_VERBOSE, "OCAK: Current TSC func address: 0x%llX, variable address: 0x%llX\n", *FuncAddr, VarSymAddr));
 
   if (Is32Bit) {
     ValueLower = (UINT32)Value;
     ValueUpper = (UINT32)(Value >> 32);
 
     //
+    // 32-bit uses absolute addressing
+    //
     // mov [var], value lower
     //
-    VarAddr32   = (UINT32)((Var - Start) + DataSection->Section32.Address - DataSection->Section32.Offset);
+    VarAddr32   = (UINT32)(VarSymAddr);
     *Location++ = 0xC7;
     *Location++ = 0x05;
     CopyMem (Location, &VarAddr32, sizeof (VarAddr32));
@@ -1045,6 +1122,8 @@ PatchMovVar (
     Location += sizeof (VarAddr32);
     CopyMem (Location, &ValueUpper, sizeof (ValueUpper));
     Location += sizeof (ValueUpper);
+
+    *FuncAddr += (Location - Start);
   } else {
     //
     // mov rax, value
@@ -1052,20 +1131,20 @@ PatchMovVar (
     *Location++ = 0x48;
     *Location++ = 0xB8;
     CopyMem (Location, &Value, sizeof (Value));
-    Location += sizeof (Value);
-
-    LocationAddr = (Location - Start) + TextSection->Section64.Address - TextSection->Section64.Offset;
-    VarAddr64    = (Var - Start) + DataSection->Section64.Address - DataSection->Section64.Offset;
+    Location  += sizeof (Value);
+    *FuncAddr += sizeof (Value) + 2;
 
     //
     // mov [var], rax
     //
-    Delta       = (INT32)(VarAddr64 - (LocationAddr + 7));
+    Delta = (INT32)(VarSymAddr - (*FuncAddr + 7));
+    DEBUG ((DEBUG_VERBOSE, "OCAK: TSC func delta 0x%X\n", Delta));
     *Location++ = 0x48;
     *Location++ = 0x89;
     *Location++ = 0x05;
     CopyMem (Location, &Delta, sizeof (Delta));
-    Location += sizeof (Delta);
+    Location  += sizeof (Delta);
+    *FuncAddr += sizeof (Delta) + 3;
   }
 
   return Location;
@@ -1249,7 +1328,7 @@ PatchProvideCurrentCpuInfoMSR35h (
   // Anyone can test/contribute as needed.
   //
   if (KernelVersion < KERNEL_VERSION_MOJAVE_MIN) {
-    DEBUG ((DEBUG_INFO, "OCAK: Ignoring CPU INFO for AMP below macOS 10.14\n"));
+    DEBUG ((DEBUG_INFO, "OCAK: [OK] Ignoring CPU INFO for AMP below macOS 10.14\n"));
     return EFI_SUCCESS;
   }
 
@@ -1294,18 +1373,157 @@ PatchProvideCurrentCpuInfoMSR35h (
                Patcher,
                &mProvideCurrentCpuInfoTopologyCorePerPackageV1Patch
                );
-    if (EFI_ERROR (Status)) {
-      Status = PatcherApplyGenericPatch (
-                 Patcher,
-                 &mProvideCurrentCpuInfoTopologyCorePerPackageV1_5Patch
-                 );
-    }
+  }
+
+  if (EFI_ERROR (Status)) {
+    Status = PatcherApplyGenericPatch (
+               Patcher,
+               &mProvideCurrentCpuInfoTopologyCorePerPackageV1_5Patch
+               );
   }
 
   DEBUG ((DEBUG_INFO, "OCAK: Patching core per package count - %r\n", Status));
 
   return Status;
 }
+
+STATIC
+CONST UINT8
+  mProvideCurrentCpuInfoLeopardSysctlMibInitFind1[] = {
+  0xE8, 0x00, 0x00, 0x00, 0x00,            // call _ml_cpu_cache_sharing / _ml_cpu_cache_size
+  0xC7, 0x04, 0x24, 0x02, 0x00, 0x00, 0x00 // mov dword ptr [esp], 0x2/0x3
+};
+
+STATIC
+CONST UINT8
+  mProvideCurrentCpuInfoLeopardSysctlMibInitMask1[] = {
+  0xFF, 0x00, 0x00, 0x00, 0x00,
+  0xFF, 0xFF, 0xFF, 0xFE, 0xFF,0xFF, 0xFF
+};
+
+STATIC
+UINT8
+  mProvideCurrentCpuInfoLeopardSysctlMibInitReplace1[] = {
+  0xB8, 0x00, 0x00, 0x00, 0x00, // mov eax, (UINT32 value for func param 1 or 2)
+  0x31, 0xD2,                   // xor edx, edx
+  0x90,                         // nop
+  0x90,                         // nop
+  0x90,                         // nop
+  0x90,                         // nop
+  0x90                          // nop
+};
+
+STATIC
+PATCHER_GENERIC_PATCH
+  mProvideCurrentCpuInfoLeopardSysctlMibInitPatch1 = {
+  .Comment     = DEBUG_POINTER ("_sysctl_mib_init Leopard patch 1"),
+  .Base        = "_sysctl_mib_init",
+  .Find        = mProvideCurrentCpuInfoLeopardSysctlMibInitFind1,
+  .Mask        = mProvideCurrentCpuInfoLeopardSysctlMibInitMask1,
+  .Replace     = mProvideCurrentCpuInfoLeopardSysctlMibInitReplace1,
+  .ReplaceMask = NULL,
+  .Size        = sizeof (mProvideCurrentCpuInfoLeopardSysctlMibInitReplace1),
+  .Count       = 1,
+  .Skip        = 0,
+  .Limit       = 0
+};
+
+STATIC
+CONST UINT8
+  mProvideCurrentCpuInfoLeopardSysctlMibInitFind2[] = {
+  0xE8, 0x00, 0x00, 0x00, 0x00,            // call _ml_cpu_cache_sharing / _ml_cpu_cache_size
+  0xC7, 0x04, 0x24, 0x00, 0x00, 0x00, 0x00 // mov dword ptr [esp], 0x0
+};
+
+STATIC
+CONST UINT8
+  mProvideCurrentCpuInfoLeopardSysctlMibInitMask2[] = {
+  0xFF, 0x00, 0x00, 0x00, 0x00,
+  0xFF, 0xFF, 0xFF, 0xFF, 0xFF,0xFF, 0xFF
+};
+
+STATIC
+UINT8
+  mProvideCurrentCpuInfoLeopardSysctlMibInitReplace2[] = {
+  0xB8, 0x00, 0x00, 0x00, 0x00,            // mov eax, (UINT32 value for func param = 3)
+  0xC7, 0x04, 0x24, 0x00, 0x00, 0x00, 0x00 // mov dword ptr [esp], 0x0
+};
+
+STATIC
+PATCHER_GENERIC_PATCH
+  mProvideCurrentCpuInfoLeopardSysctlMibInitPatch2 = {
+  .Comment     = DEBUG_POINTER ("_sysctl_mib_init Leopard patch 2"),
+  .Base        = "_sysctl_mib_init",
+  .Find        = mProvideCurrentCpuInfoLeopardSysctlMibInitFind2,
+  .Mask        = mProvideCurrentCpuInfoLeopardSysctlMibInitMask2,
+  .Replace     = mProvideCurrentCpuInfoLeopardSysctlMibInitReplace2,
+  .ReplaceMask = NULL,
+  .Size        = sizeof (mProvideCurrentCpuInfoLeopardSysctlMibInitReplace2),
+  .Count       = 1,
+  .Skip        = 0,
+  .Limit       = 0
+};
+
+STATIC
+CONST UINT8
+  mProvideCurrentCpuInfoSnowLeopardSysctlMibInitFind[] = {
+  0xA3, 0x00, 0x00, 0x00, 0x00,             // mov dword [...], eax
+  0x89, 0x15, 0x00, 0x00, 0x00, 0x00,       // mov dword [...], edx
+  0xC7, 0x04, 0x24, 0x00, 0x00, 0x00, 0x00, // mov dword ptr [esp], 0x2/0x3
+  0xE8, 0x00, 0x00, 0x00, 0x00              // call _ml_cpu_cache_sharing / _ml_cpu_cache_size
+};
+
+STATIC
+CONST UINT8
+  mProvideCurrentCpuInfoSnowLeopardSysctlMibInitFindMask[] = {
+  0xFF, 0x00, 0x00, 0x00, 0x00,
+  0xFF, 0xFF, 0x00, 0x00, 0x00,0x00,
+  0xFF, 0xFF, 0xFF, 0x00, 0x00,0x00, 0x00,
+  0xFF, 0x00, 0x00, 0x00, 0x00
+};
+
+STATIC
+UINT8
+  mProvideCurrentCpuInfoSnowLeopardSysctlMibInitReplace[] = {
+  0xA3, 0x00, 0x00, 0x00, 0x00,       // mov dword [...], eax
+  0x89, 0x15, 0x00, 0x00, 0x00, 0x00, // mov dword [...], edx
+  0xB8, 0x00, 0x00, 0x00, 0x00,       // mov eax, (UINT32 value for func param 1 or 2)
+  0x31, 0xD2,                         // xor edx, edx
+  0x90,                               // nop
+  0x90,                               // nop
+  0x90,                               // nop
+  0x90,                               // nop
+  0x90                                // nop
+};
+
+STATIC
+CONST UINT8
+  mProvideCurrentCpuInfoSnowLeopardSysctlMibInitReplaceMask[] = {
+  0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00,0x00,
+  0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+  0xFF, 0xFF,
+  0xFF,
+  0xFF,
+  0xFF,
+  0xFF,
+  0xFF
+};
+
+STATIC
+PATCHER_GENERIC_PATCH
+  mProvideCurrentCpuInfoSnowLeopardSysctlMibInitPatch = {
+  .Comment     = DEBUG_POINTER ("_sysctl_mib_init Snow Leopard patch"),
+  .Base        = "_sysctl_mib_init",
+  .Find        = mProvideCurrentCpuInfoSnowLeopardSysctlMibInitFind,
+  .Mask        = mProvideCurrentCpuInfoSnowLeopardSysctlMibInitFindMask,
+  .Replace     = mProvideCurrentCpuInfoSnowLeopardSysctlMibInitReplace,
+  .ReplaceMask = mProvideCurrentCpuInfoSnowLeopardSysctlMibInitReplaceMask,
+  .Size        = sizeof (mProvideCurrentCpuInfoSnowLeopardSysctlMibInitReplace),
+  .Count       = 1,
+  .Skip        = 0,
+  .Limit       = 0
+};
 
 EFI_STATUS
 PatchProvideCurrentCpuInfo (
@@ -1316,25 +1534,28 @@ PatchProvideCurrentCpuInfo (
 {
   EFI_STATUS  Status;
 
-  UINT8             *Start;
-  MACH_SECTION_ANY  *DataSection;
-  MACH_SECTION_ANY  *TextSection;
-
   INT32   Delta;
-  UINT64  LocationAddr;
-  UINT64  VarAddr64;
+  UINT32  VarAddr32;
+  UINT32  ValueLower;
+  UINT32  ValueUpper;
+  UINT8   *Record;
+  UINT8   *Start;
+  UINT8   *Last;
+  UINT32  Index;
+  UINT32  Index2;
 
   UINT8  *TscInitFunc;
   UINT8  *TmrCvtFunc;
 
-  UINT8  *BusFreq;
-  UINT8  *BusFCvtt2n;
-  UINT8  *BusFCvtn2t;
-  UINT8  *TscFreq;
-  UINT8  *TscFCvtt2n;
-  UINT8  *TscFCvtn2t;
-  UINT8  *TscGranularity;
-  UINT8  *Bus2Tsc;
+  UINT64  TscInitFuncSymAddr;
+  UINT64  BusFreqSymAddr;
+  UINT64  BusFCvtt2nSymAddr;
+  UINT64  BusFCvtn2tSymAddr;
+  UINT64  TscFreqSymAddr;
+  UINT64  TscFCvtt2nSymAddr;
+  UINT64  TscFCvtn2tSymAddr;
+  UINT64  TscGranularitySymAddr;
+  UINT64  Bus2TscSymAddr;
 
   UINT8  *TscLocation;
 
@@ -1346,56 +1567,112 @@ PatchProvideCurrentCpuInfo (
   UINT64  tscFCvtn2tValue;
   UINT64  tscGranularityValue;
 
+  BOOLEAN  IsLeaf4CacheSupported;
+
+  BOOLEAN  IsTiger;
+  BOOLEAN  IsLeopard;
+  BOOLEAN  IsSnowLeopard;
+  BOOLEAN  IsTigerCacheUnsupported;
+  UINT8    *LocationTigerCache;
+  UINT8    *LocationTigerCacheEnd;
+
+  APPLE_INTEL_CPU_CACHE_TYPE  CacheType;
+  CPUID_CACHE_PARAMS_EAX      CpuidCacheParamsEax;
+  CPUID_CACHE_PARAMS_EBX      CpuidCacheParamsEbx;
+  CPUID_CACHE_INFO_CACHE_TLB  CpuidCacheInfo[4];
+  UINT8                       CpuidCacheDescriptors[64];
+  UINT32                      CacheSets;
+  UINT32                      CacheSizes[LCACHE_MAX];
+  UINT32                      CacheSize;
+  UINT32                      CacheLineSizes[LCACHE_MAX];
+  UINT32                      CacheLineSize;
+  UINT32                      CacheSharings[LCACHE_MAX];
+  BOOLEAN                     CacheDescriptorFound;
+  cache_type_t                CacheDescriptorType;
+  UINT32                      CacheDescriptorSize;
+
   UINT32  msrCoreThreadCount;
 
   ASSERT (Patcher != NULL);
 
-  Status  = EFI_SUCCESS;
-  Status |= PatchProvideCurrentCpuInfoMSR35h (Patcher, CpuInfo, KernelVersion);
+  LocationTigerCache    = NULL;
+  LocationTigerCacheEnd = NULL;
 
   Start = ((UINT8 *)MachoGetMachHeader (&Patcher->MachContext));
+  Last  = Start + MachoGetInnerSize (&Patcher->MachContext) - EFI_PAGE_SIZE * 2;
+
+  IsLeaf4CacheSupported = CpuInfo->MaxId >= CPUID_CACHE_PARAMS;
+
+  IsTiger       = OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_TIGER_MIN, KERNEL_VERSION_TIGER_MAX);
+  IsLeopard     = OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_LEOPARD_MIN, KERNEL_VERSION_LEOPARD_MAX);
+  IsSnowLeopard = OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_SNOW_LEOPARD_MIN, KERNEL_VERSION_SNOW_LEOPARD_MAX);
 
   //
-  // 10.6 and below has variables in __DATA/__data instead of __DATA/__common
+  // 10.4 does not support pulling CPUID leaf 4 that may contain cache info instead of leaf 2.
+  // On processors that support leaf 4, use that instead.
   //
-  if (OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_LION_MIN, 0)) {
-    DataSection = MachoGetSegmentSectionByName (&Patcher->MachContext, "__DATA", "__common");
-  } else {
-    DataSection = MachoGetSegmentSectionByName (&Patcher->MachContext, "__DATA", "__data");
-  }
+  IsTigerCacheUnsupported = IsTiger && IsLeaf4CacheSupported;
 
-  TextSection = MachoGetSegmentSectionByName (&Patcher->MachContext, "__TEXT", "__text");
+  Status  = EFI_SUCCESS;
+  Status |= PatchProvideCurrentCpuInfoMSR35h (Patcher, CpuInfo, KernelVersion);
 
   //
   // Pull required symbols.
   //
-  Status |= PatcherGetSymbolAddress (Patcher, "_tsc_init", (UINT8 **)&TscInitFunc);
+  Status |= PatcherGetSymbolAddressValue (Patcher, "_tsc_init", (UINT8 **)&TscInitFunc, &TscInitFuncSymAddr);
   Status |= PatcherGetSymbolAddress (Patcher, "_tmrCvt", (UINT8 **)&TmrCvtFunc);
 
-  Status |= PatcherGetSymbolAddress (Patcher, "_busFreq", (UINT8 **)&BusFreq);
-  Status |= PatcherGetSymbolAddress (Patcher, "_busFCvtt2n", (UINT8 **)&BusFCvtt2n);
-  Status |= PatcherGetSymbolAddress (Patcher, "_busFCvtn2t", (UINT8 **)&BusFCvtn2t);
-  Status |= PatcherGetSymbolAddress (Patcher, "_tscFreq", (UINT8 **)&TscFreq);
-  Status |= PatcherGetSymbolAddress (Patcher, "_tscFCvtt2n", (UINT8 **)&TscFCvtt2n);
-  Status |= PatcherGetSymbolAddress (Patcher, "_tscFCvtn2t", (UINT8 **)&TscFCvtn2t);
-  Status |= PatcherGetSymbolAddress (Patcher, "_tscGranularity", (UINT8 **)&TscGranularity);
-  Status |= PatcherGetSymbolAddress (Patcher, "_bus2tsc", (UINT8 **)&Bus2Tsc);
+  //
+  // _busFreq only exists on 10.5 and higher.
+  //
+  if (!IsTiger) {
+    Status |= PatcherGetSymbolValue (Patcher, "_busFreq", &BusFreqSymAddr);
+  }
+
+  Status |= PatcherGetSymbolValue (Patcher, "_busFCvtt2n", &BusFCvtt2nSymAddr);
+  Status |= PatcherGetSymbolValue (Patcher, "_busFCvtn2t", &BusFCvtn2tSymAddr);
+  Status |= PatcherGetSymbolValue (Patcher, "_tscFreq", &TscFreqSymAddr);
+  Status |= PatcherGetSymbolValue (Patcher, "_tscFCvtt2n", &TscFCvtt2nSymAddr);
+  Status |= PatcherGetSymbolValue (Patcher, "_tscFCvtn2t", &TscFCvtn2tSymAddr);
+  Status |= PatcherGetSymbolValue (Patcher, "_tscGranularity", &TscGranularitySymAddr);
+  Status |= PatcherGetSymbolValue (Patcher, "_bus2tsc", &Bus2TscSymAddr);
 
   if (EFI_ERROR (Status)) {
-    DEBUG ((DEBUG_WARN, "OCAK: Failed to locate one or more TSC symbols - %r\n", Status));
+    DEBUG ((DEBUG_WARN, "OCAK: [FAIL] Failed to locate one or more TSC symbols - %r\n", Status));
     return EFI_NOT_FOUND;
   }
 
   //
   // Perform TSC and FSB calculations. This is traditionally done in tsc.c in XNU.
   //
-  busFreqValue    = CpuInfo->FSBFrequency;
-  busFCvtt2nValue = DivU64x64Remainder ((1000000000ULL << 32), busFreqValue, NULL);
-  busFCvtn2tValue = DivU64x64Remainder (0xFFFFFFFFFFFFFFFFULL, busFCvtt2nValue, NULL);
+  // For AMD Processors
+  if ((CpuInfo->Family == 0xF) && ((CpuInfo->ExtFamily == 0x8) || (CpuInfo->ExtFamily == 0xA) || (CpuInfo->ExtFamily == 0xB))) {
+    DEBUG ((DEBUG_INFO, "OCAK: Setting FSB and TSC for Family 0x%x and ExtFamily 0x%x\n", (UINT16)CpuInfo->Family, (UINT16)CpuInfo->ExtFamily));
+    busFreqValue = CpuInfo->FSBFrequency;
 
-  tscFreqValue    = CpuInfo->CPUFrequency;
-  tscFCvtt2nValue = DivU64x64Remainder ((1000000000ULL << 32), tscFreqValue, NULL);
-  tscFCvtn2tValue = DivU64x64Remainder (0xFFFFFFFFFFFFFFFFULL, tscFCvtt2nValue, NULL);
+    // Handle case where FSBFrequency is zero, providing a fallback
+    if (busFreqValue == 0) {
+      busFreqValue = 100000000; // Assume 100 MHz FSB as fallback
+      DEBUG ((DEBUG_WARN, "OCAK: FSBFrequency is zero, using fallback value: 100 MHz\n"));
+    }
+
+    busFCvtt2nValue = DivU64x64Remainder ((1000000000ULL << 32), busFreqValue, NULL);
+    busFCvtn2tValue = DivU64x64Remainder ((1000000000ULL << 32), busFCvtt2nValue, NULL);
+
+    tscFreqValue    = CpuInfo->CPUFrequency;
+    tscFCvtt2nValue = DivU64x64Remainder ((1000000000ULL << 32), tscFreqValue, NULL);
+    tscFCvtn2tValue = DivU64x64Remainder ((1000000000ULL << 32), tscFCvtt2nValue, NULL);
+  }
+  // For all other processors
+  else {
+    busFreqValue    = CpuInfo->FSBFrequency;
+    busFCvtt2nValue = DivU64x64Remainder ((1000000000ULL << 32), busFreqValue, NULL);
+    busFCvtn2tValue = DivU64x64Remainder (0xFFFFFFFFFFFFFFFFULL, busFCvtt2nValue, NULL);
+
+    tscFreqValue    = CpuInfo->CPUFrequency;
+    tscFCvtt2nValue = DivU64x64Remainder ((1000000000ULL << 32), tscFreqValue, NULL);
+    tscFCvtn2tValue = DivU64x64Remainder (0xFFFFFFFFFFFFFFFFULL, tscFCvtt2nValue, NULL);
+  }
 
   tscGranularityValue = DivU64x64Remainder (tscFreqValue, busFreqValue, NULL);
 
@@ -1407,36 +1684,82 @@ PatchProvideCurrentCpuInfo (
   //
   TscLocation = TscInitFunc;
 
-  TscLocation = PatchMovVar (TscLocation, Start, DataSection, TextSection, Patcher->Is32Bit, BusFreq, busFreqValue);
-  TscLocation = PatchMovVar (TscLocation, Start, DataSection, TextSection, Patcher->Is32Bit, BusFCvtt2n, busFCvtt2nValue);
-  TscLocation = PatchMovVar (TscLocation, Start, DataSection, TextSection, Patcher->Is32Bit, BusFCvtn2t, busFCvtn2tValue);
-  TscLocation = PatchMovVar (TscLocation, Start, DataSection, TextSection, Patcher->Is32Bit, TscFreq, tscFreqValue);
-  TscLocation = PatchMovVar (TscLocation, Start, DataSection, TextSection, Patcher->Is32Bit, TscFCvtt2n, tscFCvtt2nValue);
-  TscLocation = PatchMovVar (TscLocation, Start, DataSection, TextSection, Patcher->Is32Bit, TscFCvtn2t, tscFCvtn2tValue);
-  TscLocation = PatchMovVar (TscLocation, Start, DataSection, TextSection, Patcher->Is32Bit, TscGranularity, tscGranularityValue);
-  TscLocation = PatchMovVar (TscLocation, Start, DataSection, TextSection, Patcher->Is32Bit, BusFreq, busFreqValue);
+  if (OcMatchDarwinVersion (KernelVersion, KERNEL_VERSION_LEOPARD_MIN, 0)) {
+    TscLocation = PatchMovVar (TscLocation, Patcher->Is32Bit, &TscInitFuncSymAddr, BusFreqSymAddr, busFreqValue);
+  }
+
+  TscLocation = PatchMovVar (TscLocation, Patcher->Is32Bit, &TscInitFuncSymAddr, BusFCvtt2nSymAddr, busFCvtt2nValue);
+  TscLocation = PatchMovVar (TscLocation, Patcher->Is32Bit, &TscInitFuncSymAddr, BusFCvtn2tSymAddr, busFCvtn2tValue);
+  TscLocation = PatchMovVar (TscLocation, Patcher->Is32Bit, &TscInitFuncSymAddr, TscFreqSymAddr, tscFreqValue);
+  TscLocation = PatchMovVar (TscLocation, Patcher->Is32Bit, &TscInitFuncSymAddr, TscFCvtt2nSymAddr, tscFCvtt2nValue);
+  TscLocation = PatchMovVar (TscLocation, Patcher->Is32Bit, &TscInitFuncSymAddr, TscFCvtn2tSymAddr, tscFCvtn2tValue);
+  TscLocation = PatchMovVar (TscLocation, Patcher->Is32Bit, &TscInitFuncSymAddr, TscGranularitySymAddr, tscGranularityValue);
 
   if (Patcher->Is32Bit) {
-    // TODO
-  } else {
     //
-    // mov rdi, FSB freq
+    // push ebp
+    // move ebp, esp
     //
-    *TscLocation++ = 0x48;
-    *TscLocation++ = 0xBF;
-    CopyMem (TscLocation, &busFreqValue, sizeof (busFreqValue));
-    TscLocation += sizeof (busFreqValue);
+    *TscLocation++ = 0x55;
+    *TscLocation++ = 0x89;
+    *TscLocation++ = 0xE5;
+
+    ValueLower = (UINT32)busFreqValue;
+    ValueUpper = (UINT32)(busFreqValue >> 32);
 
     //
-    // mov rsi, TSC freq
+    // mov eax, FSB freq (lower)
     //
-    *TscLocation++ = 0x48;
-    *TscLocation++ = 0xBE;
-    CopyMem (TscLocation, &tscFreqValue, sizeof (tscFreqValue));
-    TscLocation += sizeof (tscFreqValue);
+    *TscLocation++ = 0xB8;
+    CopyMem (TscLocation, &ValueLower, sizeof (ValueLower));
+    TscLocation += sizeof (ValueLower);
 
     //
-    // call _tmrCvt
+    // push eax
+    //
+    *TscLocation++ = 0x50;
+
+    //
+    // mov eax, FSB freq (higher)
+    //
+    *TscLocation++ = 0xB8;
+    CopyMem (TscLocation, &ValueUpper, sizeof (ValueUpper));
+    TscLocation += sizeof (ValueUpper);
+
+    //
+    // push eax
+    //
+    *TscLocation++ = 0x50;
+
+    ValueLower = (UINT32)tscFreqValue;
+    ValueUpper = (UINT32)(tscFreqValue >> 32);
+
+    //
+    // mov eax, TSC freq (lower)
+    //
+    *TscLocation++ = 0xB8;
+    CopyMem (TscLocation, &ValueLower, sizeof (ValueLower));
+    TscLocation += sizeof (ValueLower);
+
+    //
+    // push eax
+    //
+    *TscLocation++ = 0x50;
+
+    //
+    // mov eax, TSC freq (higher)
+    //
+    *TscLocation++ = 0xB8;
+    CopyMem (TscLocation, &ValueUpper, sizeof (ValueUpper));
+    TscLocation += sizeof (ValueUpper);
+
+    //
+    // push eax
+    //
+    *TscLocation++ = 0x50;
+
+    //
+    // call _tmrCvt(busFCvtt2n, tscFCvtn2t)
     //
     Delta          = (INT32)(TmrCvtFunc - (TscLocation + 5));
     *TscLocation++ = 0xE8;
@@ -1444,11 +1767,63 @@ PatchProvideCurrentCpuInfo (
     TscLocation += sizeof (Delta);
 
     //
+    // mov [_bus2tsc], eax
+    //
+    VarAddr32      = (UINT32)(Bus2TscSymAddr);
+    *TscLocation++ = 0xA3;
+    CopyMem (TscLocation, &VarAddr32, sizeof (VarAddr32));
+    TscLocation += sizeof (VarAddr32);
+
+    //
+    // mov [_bus2tsc+4], edx
+    //
+    VarAddr32     += sizeof (UINT32);
+    *TscLocation++ = 0x89;
+    *TscLocation++ = 0x15;
+    CopyMem (TscLocation, &VarAddr32, sizeof (VarAddr32));
+    TscLocation += sizeof (VarAddr32);
+
+    //
+    // pop eax (x4)
+    // leave
+    //
+    *TscLocation++ = 0x58;
+    *TscLocation++ = 0x58;
+    *TscLocation++ = 0x58;
+    *TscLocation++ = 0x58;
+    *TscLocation++ = 0xC9;
+  } else {
+    //
+    // mov rdi, FSB freq
+    //
+    *TscLocation++ = 0x48;
+    *TscLocation++ = 0xBF;
+    CopyMem (TscLocation, &busFreqValue, sizeof (busFreqValue));
+    TscLocation        += sizeof (busFreqValue);
+    TscInitFuncSymAddr += sizeof (busFreqValue) + 2;
+
+    //
+    // mov rsi, TSC freq
+    //
+    *TscLocation++ = 0x48;
+    *TscLocation++ = 0xBE;
+    CopyMem (TscLocation, &tscFreqValue, sizeof (tscFreqValue));
+    TscLocation        += sizeof (tscFreqValue);
+    TscInitFuncSymAddr += sizeof (tscFreqValue) + 2;
+
+    //
+    // call _tmrCvt(busFCvtt2n, tscFCvtn2t)
+    //
+    Delta          = (INT32)(TmrCvtFunc - (TscLocation + 5));
+    *TscLocation++ = 0xE8;
+    CopyMem (TscLocation, &Delta, sizeof (Delta));
+    TscLocation        += sizeof (Delta);
+    TscInitFuncSymAddr += sizeof (Delta) + 1;
+
+    //
     // mov [_bus2tsc], rax
     //
-    LocationAddr = (TscLocation - Start) + TextSection->Section64.Address - TextSection->Section64.Offset;
-    VarAddr64    = (Bus2Tsc - Start) + DataSection->Section64.Address - DataSection->Section64.Offset;
-    Delta        = (INT32)(VarAddr64 - (LocationAddr + 7));
+    Delta = (INT32)(Bus2TscSymAddr - (TscInitFuncSymAddr + 7));
 
     *TscLocation++ = 0x48;
     *TscLocation++ = 0x89;
@@ -1461,6 +1836,390 @@ PatchProvideCurrentCpuInfo (
   // ret
   //
   *TscLocation++ = 0xC3;
+
+  //
+  // Find patch region for injecting CPU cache information
+  // into set_intel_cache_info.
+  //
+  if (IsTigerCacheUnsupported) {
+    Status = PatcherGetSymbolAddress (Patcher, "_cpuid_info", (UINT8 **)&Record);
+    if (EFI_ERROR (Status) || (Record >= Last)) {
+      DEBUG ((DEBUG_WARN, "OCAK: [FAIL] Failed to locate _cpuid_info (%p) - %r\n", Record, Status));
+      return EFI_NOT_FOUND;
+    }
+
+    //
+    // Start of patch area.
+    // We'll use this area to populate info_p.
+    //
+    STATIC CONST UINT8  mKernelCpuidFindCacheLocTigerStart[9] = {
+      0x8B, 0x45, 0x08,       // mov eax, dword [ebp+0x8] (*info_p argument)
+      0x8B, 0x50, 0x74,       // mov edx, dword [eax+0x74]
+      0x85, 0xD2,             // test edx, edx
+      0x75                    // jne ...
+    };
+
+    //
+    // End of patch area.
+    //
+    STATIC CONST UINT8  mKernelCpuidFindCacheLocTigerEnd[5] = {
+      0x31, 0xC0,       // xor eax, eax
+      0x0F, 0xA2,       // cpuid
+      0x89              // mov ...
+    };
+
+    for (Index = 0; Index < EFI_PAGE_SIZE; Index++, Record++) {
+      if (  (Record[0] == mKernelCpuidFindCacheLocTigerStart[0])
+         && (Record[1] == mKernelCpuidFindCacheLocTigerStart[1])
+         && (Record[2] == mKernelCpuidFindCacheLocTigerStart[2])
+         && (Record[3] == mKernelCpuidFindCacheLocTigerStart[3])
+         && (Record[4] == mKernelCpuidFindCacheLocTigerStart[4])
+         && (Record[5] == mKernelCpuidFindCacheLocTigerStart[5])
+         && (Record[6] == mKernelCpuidFindCacheLocTigerStart[6])
+         && (Record[7] == mKernelCpuidFindCacheLocTigerStart[7])
+         && (Record[8] == mKernelCpuidFindCacheLocTigerStart[8]))
+      {
+        break;
+      }
+    }
+
+    if (Index >= EFI_PAGE_SIZE) {
+      return EFI_NOT_FOUND;
+    }
+
+    LocationTigerCache = Record + 3;
+
+    for ( ; Index < EFI_PAGE_SIZE; Index++, Record++) {
+      if (  (Record[0] == mKernelCpuidFindCacheLocTigerEnd[0])
+         && (Record[1] == mKernelCpuidFindCacheLocTigerEnd[1])
+         && (Record[2] == mKernelCpuidFindCacheLocTigerEnd[2])
+         && (Record[3] == mKernelCpuidFindCacheLocTigerEnd[3])
+         && (Record[4] == mKernelCpuidFindCacheLocTigerEnd[4]))
+      {
+        break;
+      }
+    }
+
+    if (Index >= EFI_PAGE_SIZE) {
+      return EFI_NOT_FOUND;
+    }
+
+    LocationTigerCacheEnd = Record;
+
+    DEBUG ((
+      DEBUG_INFO,
+      "OCAK: CPU info cache loc %p:%p\n",
+      LocationTigerCache - Start,
+      LocationTigerCacheEnd - Start
+      ));
+
+    ZeroMem (CacheLineSizes, sizeof (CacheLineSizes));
+
+    //
+    // Build CPU info struct
+    //
+    Index = 0;
+    do {
+      AsmCpuidEx (CPUID_CACHE_PARAMS, Index, &CpuidCacheParamsEax.Uint32, &CpuidCacheParamsEbx.Uint32, &CacheSets, NULL);
+      if (CpuidCacheParamsEax.Bits.CacheType == 0) {
+        break;
+      }
+
+      switch (CpuidCacheParamsEax.Bits.CacheLevel) {
+        case 1:
+          CacheType = (CpuidCacheParamsEax.Bits.CacheType == 1) ? L1D :
+                      (CpuidCacheParamsEax.Bits.CacheType == 2) ? L1I :
+                      Lnone;
+          break;
+
+        case 2:
+          CacheType = (CpuidCacheParamsEax.Bits.CacheType == 3) ? L2U :
+                      Lnone;
+          break;
+
+        case 3:
+          CacheType = (CpuidCacheParamsEax.Bits.CacheType == 3) ? L3U :
+                      Lnone;
+          break;
+
+        default:
+          CacheType = Lnone;
+      }
+
+      if (CacheType != Lnone) {
+        CacheSizes[CacheType]     = (CpuidCacheParamsEbx.Bits.LineSize + 1) * (CacheSets + 1) * (CpuidCacheParamsEbx.Bits.Ways + 1);
+        CacheLineSizes[CacheType] = CpuidCacheParamsEbx.Bits.LineSize + 1;
+      }
+
+      Index++;
+    } while (TRUE);
+
+    if (CacheLineSizes[L2U]) {
+      CacheLineSize = CacheLineSizes[L2U];
+    } else if (CacheLineSizes[L1D]) {
+      CacheLineSize = CacheLineSizes[L1D];
+    } else {
+      //
+      // XNU would panic here.
+      //
+      DEBUG ((DEBUG_WARN, "OCAK: [FAIL] Unable to determine CPU cache line size\n"));
+      return EFI_UNSUPPORTED;
+    }
+
+    //
+    // Populate cache sizes.
+    // EAX = address of *info_p struct in stack; 0x68 = offset of cache size array in *info_p struct.
+    //
+    for (Index = L1I; Index < LCACHE_MAX; Index++) {
+      *LocationTigerCache++ = 0xC7;
+      *LocationTigerCache++ = 0x40;
+      *LocationTigerCache++ = 0x68 + ((UINT8)(sizeof (UINT32) * Index));
+      CopyMem (LocationTigerCache, &CacheSizes[Index], sizeof (CacheSizes[Index]));
+      LocationTigerCache += sizeof (CacheSizes[Index]);
+      DEBUG ((DEBUG_INFO, "OCAK: Cache size (L%u): %u bytes\n", (Index >= 3) ? (Index - 1) : 1, CacheSizes[Index]));
+    }
+
+    //
+    // Populate cache line size.
+    // 0x7C = offset of cache line size in *info_p struct.
+    //
+    *LocationTigerCache++ = 0xC7;
+    *LocationTigerCache++ = 0x40;
+    *LocationTigerCache++ = 0x7C;
+    CopyMem (LocationTigerCache, &CacheLineSize, sizeof (CacheLineSize));
+    LocationTigerCache += sizeof (CacheLineSize);
+    DEBUG ((DEBUG_INFO, "OCAK: Cache line size: %u bytes\n", CacheLineSize));
+
+    while (LocationTigerCache < LocationTigerCacheEnd) {
+      *LocationTigerCache++ = 0x90;
+    }
+  }
+
+  //
+  // Patch sysctl reporting if leaf 0x4 is unsupported on 10.5 and 10.6.
+  // This applies only to processors that are older than Prescott, and only on IA32.
+  //
+  if (Patcher->Is32Bit && !IsLeaf4CacheSupported && (IsLeopard || IsSnowLeopard)) {
+    ZeroMem (CpuidCacheDescriptors, sizeof (CpuidCacheDescriptors));
+    ZeroMem (CacheSizes, sizeof (CacheSizes));
+    ZeroMem (CacheSharings, sizeof (CacheSharings));
+    AsmCpuid (CPUID_CACHE_INFO, &CpuidCacheInfo[0].Uint32, &CpuidCacheInfo[1].Uint32, &CpuidCacheInfo[2].Uint32, &CpuidCacheInfo[3].Uint32);
+
+    for (Index = 0; Index < 4; Index++) {
+      if (CpuidCacheInfo[Index].Bits.NotValid) {
+        continue;
+      }
+
+      ((UINT32 *)CpuidCacheDescriptors)[Index] = CpuidCacheInfo[Index].Uint32;
+    }
+
+    for (Index = 1; Index < CpuidCacheDescriptors[0]; Index++) {
+      if ((Index * 16) > sizeof (CpuidCacheDescriptors)) {
+        break;
+      }
+
+      AsmCpuid (CPUID_CACHE_INFO, &CpuidCacheInfo[0].Uint32, &CpuidCacheInfo[1].Uint32, &CpuidCacheInfo[2].Uint32, &CpuidCacheInfo[3].Uint32);
+
+      for (Index2 = 0; Index2 < 4; Index2++) {
+        if (CpuidCacheInfo[Index2].Bits.NotValid) {
+          continue;
+        }
+
+        ((UINT32 *)CpuidCacheDescriptors)[sizeof (UINT32) * Index * Index2] = CpuidCacheInfo[Index2].Uint32;
+      }
+    }
+
+    //
+    // Get cache sizes.
+    //
+    for (Index = 0; Index < sizeof (CpuidCacheDescriptors); Index++) {
+      CacheDescriptorFound = FALSE;
+      for (Index2 = 0; Index2 < (sizeof (mCpuCacheDescriptorValues) / sizeof (mCpuCacheDescriptorValues[0])); Index2++) {
+        if (mCpuCacheDescriptorValues[Index2].value == CpuidCacheDescriptors[Index]) {
+          CacheDescriptorType  = mCpuCacheDescriptorValues[Index2].type;
+          CacheDescriptorSize  = mCpuCacheDescriptorValues[Index2].size;
+          CacheDescriptorFound = TRUE;
+          break;
+        }
+      }
+
+      if (!CacheDescriptorFound) {
+        continue;
+      }
+
+      CacheSizes[CacheDescriptorType]    = CacheDescriptorSize;
+      CacheSharings[CacheDescriptorType] = 1;
+    }
+
+    DEBUG ((DEBUG_INFO, "OCAK: Caches L1I: %u, L1D: %u, L2: %u, L3: %u\n", CacheSizes[L1I], CacheSizes[L1D], CacheSizes[L2U], CacheSizes[L3U]));
+
+    if (IsLeopard) {
+      //
+      // Patch _ml_cpu_cache_sharing (0x1)
+      //
+      CacheSize = MAX (CacheSharings[L1I], CacheSharings[L1D]);
+      CopyMem (
+        &mProvideCurrentCpuInfoLeopardSysctlMibInitReplace1[1],
+        &CacheSize,
+        sizeof (UINT32)
+        );
+      Status |= PatcherApplyGenericPatch (
+                  Patcher,
+                  &mProvideCurrentCpuInfoLeopardSysctlMibInitPatch1
+                  );
+
+      //
+      // Patch _ml_cpu_cache_sharing (0x2)
+      //
+      CopyMem (
+        &mProvideCurrentCpuInfoLeopardSysctlMibInitReplace1[1],
+        &CacheSharings[L2U],
+        sizeof (UINT32)
+        );
+      Status |= PatcherApplyGenericPatch (
+                  Patcher,
+                  &mProvideCurrentCpuInfoLeopardSysctlMibInitPatch1
+                  );
+
+      //
+      // Patch _ml_cpu_cache_sharing (0x3)
+      //
+      CopyMem (
+        &mProvideCurrentCpuInfoLeopardSysctlMibInitReplace2[1],
+        &CacheSharings[L3U],
+        sizeof (UINT32)
+        );
+      Status |= PatcherApplyGenericPatch (
+                  Patcher,
+                  &mProvideCurrentCpuInfoLeopardSysctlMibInitPatch2
+                  );
+
+      //
+      // Patch _ml_cpu_cache_size (0x1) - L1
+      //
+      CacheSize = MAX (CacheSizes[L1I], CacheSizes[L1D]);
+      CopyMem (
+        &mProvideCurrentCpuInfoLeopardSysctlMibInitReplace1[1],
+        &CacheSize,
+        sizeof (UINT32)
+        );
+      Status |= PatcherApplyGenericPatch (
+                  Patcher,
+                  &mProvideCurrentCpuInfoLeopardSysctlMibInitPatch1
+                  );
+
+      //
+      // Patch _ml_cpu_cache_size (0x2) - L2
+      //
+      CopyMem (
+        &mProvideCurrentCpuInfoLeopardSysctlMibInitReplace1[1],
+        &CacheSizes[L2U],
+        sizeof (UINT32)
+        );
+      Status |= PatcherApplyGenericPatch (
+                  Patcher,
+                  &mProvideCurrentCpuInfoLeopardSysctlMibInitPatch1
+                  );
+
+      //
+      // Patch _ml_cpu_cache_size (0x3) - L3
+      //
+      CopyMem (
+        &mProvideCurrentCpuInfoLeopardSysctlMibInitReplace2[1],
+        &CacheSizes[L3U],
+        sizeof (UINT32)
+        );
+      Status |= PatcherApplyGenericPatch (
+                  Patcher,
+                  &mProvideCurrentCpuInfoLeopardSysctlMibInitPatch2
+                  );
+    } else {
+      //
+      // Patch _ml_cpu_cache_sharing (0x1)
+      //
+      CacheSize = MAX (CacheSharings[L1I], CacheSharings[L1D]);
+      CopyMem (
+        &mProvideCurrentCpuInfoSnowLeopardSysctlMibInitReplace[12],
+        &CacheSize,
+        sizeof (UINT32)
+        );
+      Status |= PatcherApplyGenericPatch (
+                  Patcher,
+                  &mProvideCurrentCpuInfoSnowLeopardSysctlMibInitPatch
+                  );
+
+      //
+      // Patch _ml_cpu_cache_sharing (0x2)
+      //
+      CopyMem (
+        &mProvideCurrentCpuInfoSnowLeopardSysctlMibInitReplace[12],
+        &CacheSharings[L2U],
+        sizeof (UINT32)
+        );
+      Status |= PatcherApplyGenericPatch (
+                  Patcher,
+                  &mProvideCurrentCpuInfoSnowLeopardSysctlMibInitPatch
+                  );
+
+      //
+      // Patch _ml_cpu_cache_sharing (0x3)
+      //
+      CopyMem (
+        &mProvideCurrentCpuInfoSnowLeopardSysctlMibInitReplace[12],
+        &CacheSharings[L3U],
+        sizeof (UINT32)
+        );
+      Status |= PatcherApplyGenericPatch (
+                  Patcher,
+                  &mProvideCurrentCpuInfoSnowLeopardSysctlMibInitPatch
+                  );
+
+      //
+      // Patch _ml_cpu_cache_size (0x1) - L1
+      //
+      CacheSize = MAX (CacheSizes[L1I], CacheSizes[L1D]);
+      CopyMem (
+        &mProvideCurrentCpuInfoSnowLeopardSysctlMibInitReplace[12],
+        &CacheSize,
+        sizeof (UINT32)
+        );
+      Status |= PatcherApplyGenericPatch (
+                  Patcher,
+                  &mProvideCurrentCpuInfoSnowLeopardSysctlMibInitPatch
+                  );
+
+      //
+      // Patch _ml_cpu_cache_size (0x2) - L2
+      //
+      CopyMem (
+        &mProvideCurrentCpuInfoSnowLeopardSysctlMibInitReplace[12],
+        &CacheSizes[L2U],
+        sizeof (UINT32)
+        );
+      Status |= PatcherApplyGenericPatch (
+                  Patcher,
+                  &mProvideCurrentCpuInfoSnowLeopardSysctlMibInitPatch
+                  );
+
+      //
+      // Patch _ml_cpu_cache_size (0x3) - L3
+      //
+      CopyMem (
+        &mProvideCurrentCpuInfoSnowLeopardSysctlMibInitReplace[12],
+        &CacheSizes[L3U],
+        sizeof (UINT32)
+        );
+      Status |= PatcherApplyGenericPatch (
+                  Patcher,
+                  &mProvideCurrentCpuInfoSnowLeopardSysctlMibInitPatch
+                  );
+    }
+
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_WARN, "OCAK: [FAIL] Failed to patch or more areas in _sysctl_mib_init - %r\n", Status));
+      return EFI_NOT_FOUND;
+    }
+  }
 
   //
   // Patch MSR 0x35 fallback value on 10.13 and above.
@@ -1488,10 +2247,10 @@ PatchProvideCurrentCpuInfo (
                &mProvideCurrentCpuInfoZeroMsrThreadCoreCountPatch
                );
     if (EFI_ERROR (Status)) {
-      DEBUG ((DEBUG_INFO, "OCAK: Failed to find CPU MSR 0x35 default value patch - %r\n", Status));
+      DEBUG ((DEBUG_INFO, "OCAK: [FAIL] Failed to find CPU MSR 0x35 default value patch - %r\n", Status));
     }
   } else {
-    DEBUG ((DEBUG_INFO, "OCAK: Skipping CPU MSR 0x35 default value patch on %u\n", KernelVersion));
+    DEBUG ((DEBUG_INFO, "OCAK: [OK] Skipping CPU MSR 0x35 default value patch on %u\n", KernelVersion));
   }
 
   //
@@ -1503,10 +2262,10 @@ PatchProvideCurrentCpuInfo (
                &mProvideCurrentCpuInfoTopologyValidationPatch
                );
     if (EFI_ERROR (Status)) {
-      DEBUG ((DEBUG_INFO, "OCAK: Failed to find CPU topology validation patch - %r\n", Status));
+      DEBUG ((DEBUG_INFO, "OCAK: [FAIL] Failed to find CPU topology validation patch - %r\n", Status));
     }
   } else {
-    DEBUG ((DEBUG_INFO, "OCAK: Skipping CPU topology validation patch on %u\n", KernelVersion));
+    DEBUG ((DEBUG_INFO, "OCAK: [OK] Skipping CPU topology validation patch on %u\n", KernelVersion));
   }
 
   return EFI_SUCCESS;

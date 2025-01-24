@@ -19,8 +19,8 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
+#include <Library/BaseOverflowLib.h>
 #include <Library/DebugLib.h>
-#include <Library/OcGuardLib.h>
 #include <Library/OcMachoLib.h>
 
 #include "OcMachoLibInternal.h"
@@ -30,13 +30,14 @@ MachoInitializeContext (
   OUT OC_MACHO_CONTEXT  *Context,
   IN  VOID              *FileData,
   IN  UINT32            FileSize,
-  IN  UINT32            ContainerOffset,
+  IN  UINT32            HeaderOffset,
+  IN  UINT32            InnerSize,
   IN  BOOLEAN           Is32Bit
   )
 {
   return Is32Bit ?
-         MachoInitializeContext32 (Context, FileData, FileSize, ContainerOffset) :
-         MachoInitializeContext64 (Context, FileData, FileSize, ContainerOffset);
+         MachoInitializeContext32 (Context, FileData, FileSize, HeaderOffset, InnerSize) :
+         MachoInitializeContext64 (Context, FileData, FileSize, HeaderOffset, InnerSize);
 }
 
 MACH_HEADER_ANY *
@@ -48,6 +49,28 @@ MachoGetMachHeader (
   ASSERT (Context->MachHeader != NULL);
 
   return Context->MachHeader;
+}
+
+UINT32
+MachoGetInnerSize (
+  IN OUT OC_MACHO_CONTEXT  *Context
+  )
+{
+  ASSERT (Context != NULL);
+  ASSERT (Context->InnerSize != 0);
+
+  return Context->InnerSize;
+}
+
+VOID *
+MachoGetFileData (
+  IN OUT OC_MACHO_CONTEXT  *Context
+  )
+{
+  ASSERT (Context != NULL);
+  ASSERT (Context->FileData != NULL);
+
+  return Context->FileData;
 }
 
 UINT32
@@ -111,12 +134,12 @@ MachoGetUuid (
   //
   if (Context->Is32Bit) {
     STATIC_ASSERT (
-      OC_ALIGNOF (MACH_UUID_COMMAND) <= sizeof (UINT32),
+      BASE_ALIGNOF (MACH_UUID_COMMAND) <= sizeof (UINT32),
       "Alignment is not guaranteed."
       );
   } else {
     STATIC_ASSERT (
-      OC_ALIGNOF (MACH_UUID_COMMAND) <= sizeof (UINT64),
+      BASE_ALIGNOF (MACH_UUID_COMMAND) <= sizeof (UINT64),
       "Alignment is not guaranteed."
       );
   }
@@ -233,17 +256,12 @@ InternalInitialiseSymtabs (
   IN     MACH_DYSYMTAB_COMMAND  *DySymtab
   )
 {
-  UINTN    MachoAddress;
+  UINTN    FileDataAddress;
   CHAR8    *StringTable;
   UINT32   FileSize;
-  UINT32   SymbolsOffset;
-  UINT32   StringsOffset;
   UINT32   OffsetTop;
   BOOLEAN  Result;
 
-  UINT32                IndirectSymbolsOffset;
-  UINT32                LocalRelocationsOffset;
-  UINT32                ExternalRelocationsOffset;
   MACH_NLIST_ANY        *SymbolTable;
   MACH_NLIST_ANY        *IndirectSymtab;
   MACH_RELOCATION_INFO  *LocalRelocations;
@@ -258,37 +276,27 @@ InternalInitialiseSymtabs (
 
   FileSize = Context->FileSize;
 
-  Result = OcOverflowSubU32 (
+  Result = BaseOverflowMulAddU32 (
+             Symtab->NumSymbols,
+             Context->Is32Bit ? sizeof (MACH_NLIST) : sizeof (MACH_NLIST_64),
              Symtab->SymbolsOffset,
-             Context->ContainerOffset,
-             &SymbolsOffset
+             &OffsetTop
              );
-  Result |= OcOverflowMulAddU32 (
-              Symtab->NumSymbols,
-              Context->Is32Bit ? sizeof (MACH_NLIST) : sizeof (MACH_NLIST_64),
-              SymbolsOffset,
-              &OffsetTop
-              );
   if (Result || (OffsetTop > FileSize)) {
     return FALSE;
   }
 
-  Result = OcOverflowSubU32 (
+  Result = BaseOverflowAddU32 (
              Symtab->StringsOffset,
-             Context->ContainerOffset,
-             &StringsOffset
+             Symtab->StringsSize,
+             &OffsetTop
              );
-  Result |= OcOverflowAddU32 (
-              StringsOffset,
-              Symtab->StringsSize,
-              &OffsetTop
-              );
   if (Result || (OffsetTop > FileSize)) {
     return FALSE;
   }
 
-  MachoAddress = (UINTN)Context->MachHeader;
-  StringTable  = (CHAR8 *)(MachoAddress + StringsOffset);
+  FileDataAddress = (UINTN)Context->FileData;
+  StringTable     = (CHAR8 *)(FileDataAddress + Symtab->StringsOffset);
 
   if ((Symtab->StringsSize == 0) || (StringTable[Symtab->StringsSize - 1] != '\0')) {
     return FALSE;
@@ -296,8 +304,8 @@ InternalInitialiseSymtabs (
 
   SymbolTable = NULL;
 
-  Tmp = (VOID *)(MachoAddress + SymbolsOffset);
-  if (!(Context->Is32Bit ? OC_TYPE_ALIGNED (MACH_NLIST, Tmp) : OC_TYPE_ALIGNED (MACH_NLIST_64, Tmp))) {
+  Tmp = (VOID *)(FileDataAddress + Symtab->SymbolsOffset);
+  if (!(Context->Is32Bit ? BASE_TYPE_ALIGNED (MACH_NLIST, Tmp) : BASE_TYPE_ALIGNED (MACH_NLIST_64, Tmp))) {
     return FALSE;
   }
 
@@ -307,7 +315,7 @@ InternalInitialiseSymtabs (
   ExternRelocations = NULL;
 
   if (DySymtab != NULL) {
-    Result = OcOverflowAddU32 (
+    Result = BaseOverflowAddU32 (
                DySymtab->LocalSymbolsIndex,
                DySymtab->NumLocalSymbols,
                &OffsetTop
@@ -316,7 +324,7 @@ InternalInitialiseSymtabs (
       return FALSE;
     }
 
-    Result = OcOverflowAddU32 (
+    Result = BaseOverflowAddU32 (
                DySymtab->ExternalSymbolsIndex,
                DySymtab->NumExternalSymbols,
                &OffsetTop
@@ -325,7 +333,7 @@ InternalInitialiseSymtabs (
       return FALSE;
     }
 
-    Result = OcOverflowAddU32 (
+    Result = BaseOverflowAddU32 (
                DySymtab->UndefinedSymbolsIndex,
                DySymtab->NumUndefinedSymbols,
                &OffsetTop
@@ -339,23 +347,18 @@ InternalInitialiseSymtabs (
     // in their DySymtab, but it is "valid" for symbols.
     //
     if ((DySymtab->NumIndirectSymbols > 0) && (DySymtab->IndirectSymbolsOffset != 0)) {
-      Result = OcOverflowSubU32 (
+      Result = BaseOverflowMulAddU32 (
+                 DySymtab->NumIndirectSymbols,
+                 Context->Is32Bit ? sizeof (MACH_NLIST) : sizeof (MACH_NLIST_64),
                  DySymtab->IndirectSymbolsOffset,
-                 Context->ContainerOffset,
-                 &IndirectSymbolsOffset
+                 &OffsetTop
                  );
-      Result |= OcOverflowMulAddU32 (
-                  DySymtab->NumIndirectSymbols,
-                  Context->Is32Bit ? sizeof (MACH_NLIST) : sizeof (MACH_NLIST_64),
-                  IndirectSymbolsOffset,
-                  &OffsetTop
-                  );
       if (Result || (OffsetTop > FileSize)) {
         return FALSE;
       }
 
-      Tmp = (VOID *)(MachoAddress + IndirectSymbolsOffset);
-      if (!(Context->Is32Bit ? OC_TYPE_ALIGNED (MACH_NLIST, Tmp) : OC_TYPE_ALIGNED (MACH_NLIST_64, Tmp))) {
+      Tmp = (VOID *)(FileDataAddress + DySymtab->IndirectSymbolsOffset);
+      if (!(Context->Is32Bit ? BASE_TYPE_ALIGNED (MACH_NLIST, Tmp) : BASE_TYPE_ALIGNED (MACH_NLIST_64, Tmp))) {
         return FALSE;
       }
 
@@ -363,23 +366,18 @@ InternalInitialiseSymtabs (
     }
 
     if ((DySymtab->NumOfLocalRelocations > 0) && (DySymtab->LocalRelocationsOffset != 0)) {
-      Result = OcOverflowSubU32 (
+      Result = BaseOverflowMulAddU32 (
+                 DySymtab->NumOfLocalRelocations,
+                 sizeof (MACH_RELOCATION_INFO),
                  DySymtab->LocalRelocationsOffset,
-                 Context->ContainerOffset,
-                 &LocalRelocationsOffset
+                 &OffsetTop
                  );
-      Result |= OcOverflowMulAddU32 (
-                  DySymtab->NumOfLocalRelocations,
-                  sizeof (MACH_RELOCATION_INFO),
-                  LocalRelocationsOffset,
-                  &OffsetTop
-                  );
       if (Result || (OffsetTop > FileSize)) {
         return FALSE;
       }
 
-      Tmp = (VOID *)(MachoAddress + LocalRelocationsOffset);
-      if (!OC_TYPE_ALIGNED (MACH_RELOCATION_INFO, Tmp)) {
+      Tmp = (VOID *)(FileDataAddress + DySymtab->LocalRelocationsOffset);
+      if (!BASE_TYPE_ALIGNED (MACH_RELOCATION_INFO, Tmp)) {
         return FALSE;
       }
 
@@ -387,23 +385,18 @@ InternalInitialiseSymtabs (
     }
 
     if ((DySymtab->NumExternalRelocations > 0) && (DySymtab->ExternalRelocationsOffset != 0)) {
-      Result = OcOverflowSubU32 (
+      Result = BaseOverflowMulAddU32 (
+                 DySymtab->NumExternalRelocations,
+                 sizeof (MACH_RELOCATION_INFO),
                  DySymtab->ExternalRelocationsOffset,
-                 Context->ContainerOffset,
-                 &ExternalRelocationsOffset
+                 &OffsetTop
                  );
-      Result |= OcOverflowMulAddU32 (
-                  DySymtab->NumExternalRelocations,
-                  sizeof (MACH_RELOCATION_INFO),
-                  ExternalRelocationsOffset,
-                  &OffsetTop
-                  );
       if (Result || (OffsetTop > FileSize)) {
         return FALSE;
       }
 
-      Tmp = (VOID *)(MachoAddress + ExternalRelocationsOffset);
-      if (!OC_TYPE_ALIGNED (MACH_RELOCATION_INFO, Tmp)) {
+      Tmp = (VOID *)(FileDataAddress + DySymtab->ExternalRelocationsOffset);
+      if (!BASE_TYPE_ALIGNED (MACH_RELOCATION_INFO, Tmp)) {
         return FALSE;
       }
 
@@ -468,7 +461,7 @@ MachoInitialiseSymtabsExternal (
   // Context initialisation guarantees the command size is a multiple of 8.
   //
   STATIC_ASSERT (
-    OC_ALIGNOF (MACH_SYMTAB_COMMAND) <= sizeof (UINT64),
+    BASE_ALIGNOF (MACH_SYMTAB_COMMAND) <= sizeof (UINT64),
     "Alignment is not guaranteed."
     );
 
@@ -491,7 +484,7 @@ MachoInitialiseSymtabsExternal (
     // Context initialisation guarantees the command size is a multiple of 8.
     //
     STATIC_ASSERT (
-      OC_ALIGNOF (MACH_DYSYMTAB_COMMAND) <= sizeof (UINT64),
+      BASE_ALIGNOF (MACH_DYSYMTAB_COMMAND) <= sizeof (UINT64),
       "Alignment is not guaranteed."
       );
 

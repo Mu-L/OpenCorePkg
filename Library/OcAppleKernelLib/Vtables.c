@@ -17,10 +17,10 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <IndustryStandard/AppleMachoImage.h>
 
 #include <Library/BaseLib.h>
+#include <Library/BaseOverflowLib.h>
 #include <Library/DebugLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/OcAppleKernelLib.h>
-#include <Library/OcGuardLib.h>
 #include <Library/OcMachoLib.h>
 
 #include "PrelinkedInternal.h"
@@ -497,16 +497,16 @@ InternalInitializeVtablePatchData (
   OUT    MACH_NLIST_ANY        **SolveSymbols
   )
 {
-  BOOLEAN                Result;
-  UINT32                 VtableOffset;
-  UINT32                 VtableMaxSize;
-  CONST MACH_HEADER_ANY  *MachHeader;
-  VOID                   *VtableData;
-  UINT32                 SymIndex;
-  UINT32                 EntryOffset;
-  UINT64                 FileOffset;
-  UINT32                 MaxSymbols;
-  MACH_NLIST_ANY         *Symbol;
+  BOOLEAN         Result;
+  UINT32          VtableOffset;
+  UINT32          VtableMaxSize;
+  VOID            *FileData;
+  VOID            *VtableData;
+  UINT32          SymIndex;
+  UINT32          EntryOffset;
+  UINT64          FileOffset;
+  UINT32          MaxSymbols;
+  MACH_NLIST_ANY  *Symbol;
 
   Result = MachoSymbolGetFileOffset (
              MachoContext,
@@ -518,11 +518,11 @@ InternalInitializeVtablePatchData (
     return FALSE;
   }
 
-  MachHeader = MachoGetMachHeader (MachoContext);
-  ASSERT (MachHeader != NULL);
+  FileData = MachoGetFileData (MachoContext);
+  ASSERT (FileData != NULL);
 
-  VtableData = (VOID *)((UINTN)MachHeader + VtableOffset);
-  if (MachoContext->Is32Bit ? !OC_TYPE_ALIGNED (UINT32, VtableData) : !OC_TYPE_ALIGNED (UINT64, VtableData)) {
+  VtableData = (VOID *)((UINTN)FileData + VtableOffset);
+  if (MachoContext->Is32Bit ? !BASE_TYPE_ALIGNED (UINT32, VtableData) : !BASE_TYPE_ALIGNED (UINT64, VtableData)) {
     return FALSE;
   }
 
@@ -542,7 +542,7 @@ InternalInitializeVtablePatchData (
        )
   {
     if (VTABLE_ENTRY_X (MachoContext->Is32Bit, VtableData, EntryOffset) == 0) {
-      Result = OcOverflowAddU64 (
+      Result = BaseOverflowAddU64 (
                  MachoContext->Is32Bit ? VtableSymbol->Symbol32.Value : VtableSymbol->Symbol64.Value,
                  (EntryOffset * VTABLE_ENTRY_SIZE_X (MachoContext->Is32Bit)),
                  &FileOffset
@@ -591,7 +591,6 @@ InternalPatchByVtables (
   UINT32                 MaxSize;
 
   OC_MACHO_CONTEXT        *MachoContext;
-  CONST MACH_HEADER_ANY   *MachHeader;
   UINT32                  Index;
   UINT32                  NumTables;
   UINT32                  NumEntries;
@@ -620,9 +619,6 @@ InternalPatchByVtables (
   MaxSize = Context->LinkBufferSize;
 
   MachoContext = &Kext->Context.MachContext;
-
-  MachHeader = MachoGetMachHeader (MachoContext);
-  ASSERT (MachHeader != NULL);
   //
   // Retrieve all SMCPs.
   //

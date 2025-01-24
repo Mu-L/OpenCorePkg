@@ -1,7 +1,7 @@
 /** @file
   Reset System Library instance that accounts for defective UEFI systems.
 
-  Copyright (c) 2021, Marvin Häuser. All rights reserved.<BR>
+  Copyright (c) 2021, Marvin Haeuser. All rights reserved.<BR>
   SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
@@ -10,7 +10,7 @@
 
 #include <Library/BaseLib.h>
 #include <Library/DebugLib.h>
-#include <Library/OcDeviceMiscLib.h>
+#include <Library/OcDirectResetLib.h>
 #include <Library/ResetSystemLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
 

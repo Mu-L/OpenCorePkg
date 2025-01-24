@@ -25,6 +25,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <Library/MemoryAllocationLib.h>
 #include <Library/OcAcpiLib.h>
 #include <Library/OcAppleBootPolicyLib.h>
+#include <Library/OcAppleDiskImageLib.h>
 #include <Library/OcAudioLib.h>
 #include <Library/OcBootManagementLib.h>
 #include <Library/OcConsoleLib.h>
@@ -42,6 +43,8 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <Library/UefiRuntimeServicesTableLib.h>
 
 #include <Protocol/OcInterface.h>
+
+#include <ShimVars.h>
 
 STATIC
 VOID
@@ -215,6 +218,36 @@ ProduceDebugReport (
 
   DEBUG ((DEBUG_INFO, "OC: PCIInfo dumping - %r\n", Status));
 
+  Status = OcSafeFileOpen (
+             SysReport,
+             &SubReport,
+             L"GOP",
+             EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,
+             EFI_FILE_DIRECTORY
+             );
+  if (!EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_INFO, "OC: Dumping GOPInfo for report...\n"));
+    Status = OcGopInfoDump (SubReport);
+    SubReport->Close (SubReport);
+  }
+
+  DEBUG ((DEBUG_INFO, "OC: GOPInfo dumping - %r\n", Status));
+
+  Status = OcSafeFileOpen (
+             SysReport,
+             &SubReport,
+             L"Drivers",
+             EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,
+             EFI_FILE_DIRECTORY
+             );
+  if (!EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_INFO, "OC: Dumping DriverImageNames for report...\n"));
+    Status = OcDriverInfoDump (SubReport);
+    SubReport->Close (SubReport);
+  }
+
+  DEBUG ((DEBUG_INFO, "OC: DriverImageNames dumping - %r\n", Status));
+
   SysReport->Close (SysReport);
   Fs->Close (Fs);
 
@@ -225,13 +258,16 @@ STATIC
 EFI_STATUS
 EFIAPI
 OcToolLoadEntry (
-  IN  OC_STORAGE_CONTEXT        *Storage,
-  IN  OC_BOOT_ENTRY             *ChosenEntry,
-  OUT VOID                      **Data,
-  OUT UINT32                    *DataSize,
-  OUT EFI_DEVICE_PATH_PROTOCOL  **DevicePath,
-  OUT EFI_HANDLE                *StorageHandle,
-  OUT EFI_DEVICE_PATH_PROTOCOL  **StoragePath
+  IN  OC_STORAGE_CONTEXT                   *Storage,
+  IN  OC_BOOT_ENTRY                        *ChosenEntry,
+  OUT VOID                                 **Data,
+  OUT UINT32                               *DataSize,
+  OUT EFI_DEVICE_PATH_PROTOCOL             **DevicePath,
+  OUT EFI_HANDLE                           *StorageHandle,
+  OUT EFI_DEVICE_PATH_PROTOCOL             **StoragePath,
+  IN  OC_DMG_LOADING_SUPPORT               DmgLoading,
+  OUT OC_APPLE_DISK_IMAGE_PRELOAD_CONTEXT  *DmgPreloadContext,
+  OUT VOID                                 **CustomFreeContext
   )
 {
   EFI_STATUS  Status;
@@ -437,6 +473,13 @@ OcMiscEarlyInit (
     return EFI_UNSUPPORTED; ///< Should be unreachable.
   }
 
+  Status = OcShimRetainProtocol (Config->Uefi.Quirks.ShimRetainProtocol);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_WARN, "OC: Failed to set %g:%s\n", &gShimLockGuid, SHIM_RETAIN_PROTOCOL));
+  }
+
+  OcLoadDrivers (Storage, Config, NULL, TRUE);
+
   OcVariableInit (Config->Uefi.Quirks.ForceOcWriteFlash);
 
   AsciiVault = OC_BLOB_GET (&Config->Misc.Security.Vault);
@@ -572,7 +615,7 @@ BuildLauncherPath (
   // For custom paths no deduplication happens.
   //
   if (AsciiStrCmp (LauncherPath, "Default") == 0) {
-    BootstrapSize = StrSize (RootPath) + StrSize (OPEN_CORE_APP_PATH);
+    BootstrapSize = StrSize (RootPath) + L_STR_SIZE (OPEN_CORE_APP_PATH);
     BootstrapPath = AllocatePool (BootstrapSize);
     if (BootstrapPath == NULL) {
       return NULL;
@@ -763,7 +806,6 @@ OcMiscBoot (
 {
   EFI_STATUS              Status;
   OC_PICKER_CONTEXT       *Context;
-  OC_PICKER_CMD           PickerCommand;
   OC_PICKER_MODE          PickerMode;
   OC_DMG_LOADING_SUPPORT  DmgLoading;
   UINTN                   ContextSize;
@@ -774,6 +816,7 @@ OcMiscBoot (
   CHAR16                  **BlessOverride;
   CONST CHAR8             *AsciiPicker;
   CONST CHAR8             *AsciiPickerVariant;
+  CONST CHAR8             *AsciiInstanceIdentifier;
   CONST CHAR8             *AsciiDmg;
 
   AsciiPicker = OC_BLOB_GET (&Config->Misc.Boot.PickerMode);
@@ -789,7 +832,8 @@ OcMiscBoot (
     PickerMode = OcPickerModeBuiltin;
   }
 
-  AsciiPickerVariant = OC_BLOB_GET (&Config->Misc.Boot.PickerVariant);
+  AsciiPickerVariant      = OC_BLOB_GET (&Config->Misc.Boot.PickerVariant);
+  AsciiInstanceIdentifier = OC_BLOB_GET (&Config->Misc.Boot.InstanceIdentifier);
 
   AsciiDmg = OC_BLOB_GET (&Config->Misc.Security.DmgLoading);
 
@@ -837,7 +881,7 @@ OcMiscBoot (
   // Due to the file size and sanity guarantees OcXmlLib makes,
   // adding Counts cannot overflow.
   //
-  if (!OcOverflowMulAddUN (
+  if (!BaseOverflowMulAddUN (
          sizeof (OC_PICKER_ENTRY),
          Config->Misc.Entries.Count + Config->Misc.Tools.Count,
          sizeof (OC_PICKER_CONTEXT),
@@ -855,7 +899,7 @@ OcMiscBoot (
   }
 
   if (Config->Misc.BlessOverride.Count > 0) {
-    if (!OcOverflowMulUN (
+    if (!BaseOverflowMulUN (
            Config->Misc.BlessOverride.Count,
            sizeof (*BlessOverride),
            &BlessOverrideSize
@@ -918,6 +962,7 @@ OcMiscBoot (
   Context->ConsoleAttributes    = Config->Misc.Boot.ConsoleAttributes;
   Context->PickerAttributes     = Config->Misc.Boot.PickerAttributes;
   Context->PickerVariant        = AsciiPickerVariant;
+  Context->InstanceIdentifier   = AsciiInstanceIdentifier;
   Context->BlacklistAppleUpdate = Config->Misc.Security.BlacklistAppleUpdate;
 
   if ((Config->Misc.Security.ExposeSensitiveData & OCS_EXPOSE_VERSION_UI) != 0) {
@@ -927,24 +972,32 @@ OcMiscBoot (
   Status = OcHandleRecoveryRequest (
              &Context->RecoveryInitiator
              );
+
   if (!EFI_ERROR (Status)) {
-    PickerCommand = Context->PickerCommand = OcPickerBootAppleRecovery;
-  } else if (Config->Misc.Boot.ShowPicker) {
-    PickerCommand = Context->PickerCommand = OcPickerShowPicker;
+    Context->PickerCommand = OcPickerBootAppleRecovery;
+  } else if (Config->Misc.Boot.ShowPicker && !Config->Misc.Boot.HibernateSkipsPicker) {
+    Context->PickerCommand = OcPickerShowPicker;
+  } else if (Config->Misc.Boot.ShowPicker && Config->Misc.Boot.HibernateSkipsPicker) {
+    if (OcIsAppleHibernateWake ()) {
+      Context->PickerCommand = OcPickerDefault;
+    } else {
+      Context->PickerCommand = OcPickerShowPicker;
+    }
   } else {
-    PickerCommand = Context->PickerCommand = OcPickerDefault;
+    Context->PickerCommand = OcPickerDefault;
   }
 
   for (Index = 0, EntryIndex = 0; Index < Config->Misc.Entries.Count; ++Index) {
     if (Config->Misc.Entries.Values[Index]->Enabled) {
-      Context->CustomEntries[EntryIndex].Name      = OC_BLOB_GET (&Config->Misc.Entries.Values[Index]->Name);
-      Context->CustomEntries[EntryIndex].Path      = OC_BLOB_GET (&Config->Misc.Entries.Values[Index]->Path);
-      Context->CustomEntries[EntryIndex].Arguments = OC_BLOB_GET (&Config->Misc.Entries.Values[Index]->Arguments);
-      Context->CustomEntries[EntryIndex].Flavour   = OC_BLOB_GET (&Config->Misc.Entries.Values[Index]->Flavour);
-      Context->CustomEntries[EntryIndex].Auxiliary = Config->Misc.Entries.Values[Index]->Auxiliary;
-      Context->CustomEntries[EntryIndex].Tool      = FALSE;
-      Context->CustomEntries[EntryIndex].TextMode  = Config->Misc.Entries.Values[Index]->TextMode;
-      Context->CustomEntries[EntryIndex].RealPath  = TRUE; ///< Always true for entries
+      Context->CustomEntries[EntryIndex].Name            = OC_BLOB_GET (&Config->Misc.Entries.Values[Index]->Name);
+      Context->CustomEntries[EntryIndex].Path            = OC_BLOB_GET (&Config->Misc.Entries.Values[Index]->Path);
+      Context->CustomEntries[EntryIndex].Arguments       = OC_BLOB_GET (&Config->Misc.Entries.Values[Index]->Arguments);
+      Context->CustomEntries[EntryIndex].Flavour         = OC_BLOB_GET (&Config->Misc.Entries.Values[Index]->Flavour);
+      Context->CustomEntries[EntryIndex].Auxiliary       = Config->Misc.Entries.Values[Index]->Auxiliary;
+      Context->CustomEntries[EntryIndex].Tool            = FALSE;
+      Context->CustomEntries[EntryIndex].TextMode        = Config->Misc.Entries.Values[Index]->TextMode;
+      Context->CustomEntries[EntryIndex].RealPath        = TRUE;  ///< Always true for entries
+      Context->CustomEntries[EntryIndex].FullNvramAccess = FALSE;
       ++EntryIndex;
     }
   }
@@ -956,14 +1009,15 @@ OcMiscBoot (
   //
   for (Index = 0; Index < Config->Misc.Tools.Count; ++Index) {
     if (Config->Misc.Tools.Values[Index]->Enabled) {
-      Context->CustomEntries[EntryIndex].Name      = OC_BLOB_GET (&Config->Misc.Tools.Values[Index]->Name);
-      Context->CustomEntries[EntryIndex].Path      = OC_BLOB_GET (&Config->Misc.Tools.Values[Index]->Path);
-      Context->CustomEntries[EntryIndex].Arguments = OC_BLOB_GET (&Config->Misc.Tools.Values[Index]->Arguments);
-      Context->CustomEntries[EntryIndex].Flavour   = OC_BLOB_GET (&Config->Misc.Tools.Values[Index]->Flavour);
-      Context->CustomEntries[EntryIndex].Auxiliary = Config->Misc.Tools.Values[Index]->Auxiliary;
-      Context->CustomEntries[EntryIndex].Tool      = TRUE;
-      Context->CustomEntries[EntryIndex].TextMode  = Config->Misc.Tools.Values[Index]->TextMode;
-      Context->CustomEntries[EntryIndex].RealPath  = Config->Misc.Tools.Values[Index]->RealPath;
+      Context->CustomEntries[EntryIndex].Name            = OC_BLOB_GET (&Config->Misc.Tools.Values[Index]->Name);
+      Context->CustomEntries[EntryIndex].Path            = OC_BLOB_GET (&Config->Misc.Tools.Values[Index]->Path);
+      Context->CustomEntries[EntryIndex].Arguments       = OC_BLOB_GET (&Config->Misc.Tools.Values[Index]->Arguments);
+      Context->CustomEntries[EntryIndex].Flavour         = OC_BLOB_GET (&Config->Misc.Tools.Values[Index]->Flavour);
+      Context->CustomEntries[EntryIndex].Auxiliary       = Config->Misc.Tools.Values[Index]->Auxiliary;
+      Context->CustomEntries[EntryIndex].Tool            = TRUE;
+      Context->CustomEntries[EntryIndex].TextMode        = Config->Misc.Tools.Values[Index]->TextMode;
+      Context->CustomEntries[EntryIndex].RealPath        = Config->Misc.Tools.Values[Index]->RealPath;
+      Context->CustomEntries[EntryIndex].FullNvramAccess = Config->Misc.Tools.Values[Index]->FullNvramAccess;
       ++EntryIndex;
     }
   }
@@ -973,16 +1027,13 @@ OcMiscBoot (
   Context->HideAuxiliary       = Config->Misc.Boot.HideAuxiliary;
   Context->PickerAudioAssist   = Config->Misc.Boot.PickerAudioAssist;
 
+  OcPreLocateAudioProtocol (Context);
+
   DEBUG ((DEBUG_INFO, "OC: Ready for takeoff in %u us\n", (UINT32)Context->TakeoffDelay));
 
   OcLoadPickerHotKeys (Context);
 
-  Context->ShowToggleSip   = Config->Misc.Security.AllowToggleSip;
-  Context->ShowNvramReset  = Config->Misc.Security.AllowNvramReset;
   Context->AllowSetDefault = Config->Misc.Security.AllowSetDefault;
-  if (!Config->Misc.Security.AllowNvramReset && (Context->PickerCommand == OcPickerResetNvram)) {
-    Context->PickerCommand = PickerCommand;
-  }
 
   if (Interface != NULL) {
     Status = Interface->PopulateContext (Interface, Storage, Context);

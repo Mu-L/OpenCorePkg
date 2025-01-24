@@ -143,59 +143,67 @@ GetLogPath (
 STATIC
 EFI_STATUS
 GetLogPrefix (
-  IN   CONST CHAR8  *FormatString,
+  IN   CONST CHAR8  *FormattedString,
   OUT  CHAR8        *Prefix
   )
 {
-  UINTN  MaxLength;
-  UINTN  Index;
-  CHAR8  Curr;
+  UINTN  Pos;
+  CHAR8  Char;
 
-  ASSERT (FormatString != NULL);
+  ASSERT (FormattedString != NULL);
   ASSERT (Prefix != NULL);
 
-  //
-  // If FormatString just starts with colon, it must be illegal.
-  //
-  if (*FormatString == ':') {
-    return EFI_NOT_FOUND;
-  }
+  Pos = 0;
+  while (TRUE) {
+    Char = FormattedString[Pos];
 
-  MaxLength = MIN (AsciiStrLen (FormatString), OC_LOG_PREFIX_CHAR_MAX);
-  for (Index = 1; Index < MaxLength; ++Index) {
-    Curr = FormatString[Index];
+    //
+    // If we reached end of string, then ':' was not found.
+    //
+    if (Char == '\0') {
+      return EFI_NOT_FOUND;
+    }
 
     //
     // Match the first occurrence of colon.
     //
-    if (Curr == ':') {
+    if (Char == ':') {
+      //
+      // If log string starts with colon, it must be illegal.
+      //
+      if (Pos == 0) {
+        return EFI_NOT_FOUND;
+      }
+
       break;
+    }
+
+    //
+    // If size of prefix would exceed OC_LOG_PREFIX_CHAR_MAX, then not found.
+    //
+    if (Pos == OC_LOG_PREFIX_CHAR_MAX) {
+      return EFI_NOT_FOUND;
     }
 
     //
     // Except for colon, a valid prefix must be either 0-9, or uppercase letter.
     //
-    if (!(IsAsciiNumber (Curr) || ((Curr >= 'A') && (Curr <= 'Z')))) {
+    if (!(IsAsciiNumber (Char) || ((Char >= 'A') && (Char <= 'Z')))) {
       return EFI_NOT_FOUND;
     }
+
+    ++Pos;
   }
 
-  //
-  // If Index went through the end, then ':' was not found.
-  //
-  if (Index == MaxLength) {
-    return EFI_NOT_FOUND;
-  }
-
-  CopyMem (Prefix, FormatString, Index);
-  Prefix[Index] = '\0';
+  CopyMem (Prefix, FormattedString, Pos);
+  Prefix[Pos] = '\0';
   return EFI_SUCCESS;
 }
 
 STATIC
 BOOLEAN
 IsPrefixFiltered (
-  IN   CONST CHAR8          *FormatString,
+  IN   CONST CHAR8          *FormattedString,
   IN   CONST OC_FLEX_ARRAY  *FlexFilters    OPTIONAL,
   IN   BOOLEAN              BlacklistFiltering
   )
@@ -205,18 +213,18 @@ IsPrefixFiltered (
   EFI_STATUS  Status;
   CHAR8       **Value;
 
-  ASSERT (FormatString != NULL);
+  ASSERT (FormattedString != NULL);
 
   //
-  // Do not filter without filters, of course.
+  // Do not filter without filters.
   //
   if (FlexFilters == NULL) {
     return FALSE;
   }
 
-  Status = GetLogPrefix (FormatString, Prefix);
+  Status = GetLogPrefix (FormattedString, Prefix);
   if (EFI_ERROR (Status)) {
-    return FALSE;
+    AsciiStrCpyS (Prefix, ARRAY_SIZE (Prefix), "?");
   }
 
   for (Index = 0; Index < FlexFilters->Count; ++Index) {
@@ -225,14 +233,16 @@ IsPrefixFiltered (
 
     if (AsciiStrCmp (Prefix, *Value) == 0) {
       //
-      // Upon matching, return TRUE (i.e. not to print logs)
-      // if blacklisted.
+      // Upon matching, return TRUE (i.e. not to print logs) if blacklisted.
       //
       return BlacklistFiltering;
     }
   }
 
-  return FALSE;
+  //
+  // Otherwise return default, depending on positive or negative filtering.
+  //
+  return !BlacklistFiltering;
 }
 
 STATIC
@@ -241,6 +251,8 @@ InternalLogAddEntry (
   IN OC_LOG_PRIVATE_DATA  *Private,
   IN OC_LOG_PROTOCOL      *OcLog,
   IN UINTN                ErrorLevel,
+  IN CONST OC_FLEX_ARRAY  *FlexFilters    OPTIONAL,
+  IN BOOLEAN              BlacklistFiltering,
   IN CONST CHAR8          *FormatString,
   IN VA_LIST              Marker
   )
@@ -253,6 +265,8 @@ InternalLogAddEntry (
   UINT32                      KeySize;
   UINT32                      DataSize;
   UINT32                      TotalSize;
+  UINTN                       WriteSize;
+  UINTN                       WrittenSize;
 
   AsciiVSPrint (
     Private->LineBuffer,
@@ -260,6 +274,15 @@ InternalLogAddEntry (
     FormatString,
     Marker
     );
+
+  //
+  // Filter log after formatting string. Always log at WARN and ERROR level.
+  //
+  if (  ((ErrorLevel & (DEBUG_WARN | DEBUG_ERROR)) == 0)
+     && IsPrefixFiltered (Private->LineBuffer, Private->FlexFilters, Private->BlacklistFiltering))
+  {
+    return EFI_SUCCESS;
+  }
 
   //
   // Add Entry.
@@ -362,25 +385,55 @@ InternalLogAddEntry (
     //
     // Write to internal buffer.
     //
-
     Status = AsciiStrCatS (Private->AsciiBuffer, Private->AsciiBufferSize, Private->TimingTxt);
     if (!EFI_ERROR (Status)) {
-      Status = AsciiStrCatS (Private->AsciiBuffer, Private->AsciiBufferSize, Private->LineBuffer);
+      Private->AsciiBufferWrittenOffset += AsciiStrLen (Private->TimingTxt);
+      Status                             = AsciiStrCatS (Private->AsciiBuffer, Private->AsciiBufferSize, Private->LineBuffer);
+      if (!EFI_ERROR (Status)) {
+        Private->AsciiBufferWrittenOffset += AsciiStrLen (Private->LineBuffer);
+      }
     }
 
     //
     // Write to a file.
-    // Always overwriting file completely is most reliable.
-    // I know it is slow, but fixed size write is more reliable with broken FAT32 driver.
     //
     if (((OcLog->Options & OC_LOG_FILE) != 0) && (OcLog->FileSystem != NULL)) {
+      //
+      // Log lines may arrive when CurrentTpl > TPL_CALLBACK, we must batch them
+      // and emit them when we can, in both log methods.
+      //
       if (EfiGetCurrentTpl () <= TPL_CALLBACK) {
-        OcSetFileData (
-          OcLog->FileSystem,
-          OcLog->FilePath,
-          Private->AsciiBuffer,
-          (UINT32)Private->AsciiBufferSize
-          );
+        if (OcLog->UnsafeLogFile != NULL) {
+          //
+          // For non-broken FAT32 driver this is fine. For driver with broken write
+          // support (e.g. Aptio IV) this can result in corrupt file or unusable fs.
+          //
+          ASSERT (Private->AsciiBufferWrittenOffset >= Private->AsciiBufferFlushedOffset);
+          WriteSize   = Private->AsciiBufferWrittenOffset - Private->AsciiBufferFlushedOffset;
+          WrittenSize = WriteSize;
+          OcLog->UnsafeLogFile->Write (OcLog->UnsafeLogFile, &WrittenSize, &Private->AsciiBuffer[Private->AsciiBufferFlushedOffset]);
+          OcLog->UnsafeLogFile->Flush (OcLog->UnsafeLogFile);
+          Private->AsciiBufferFlushedOffset += WrittenSize;
+          if (WriteSize != WrittenSize) {
+            DEBUG ((
+              DEBUG_VERBOSE,
+              "OCL: Log write truncated %u to %u\n",
+              WriteSize,
+              WrittenSize
+              ));
+          }
+        } else {
+          //
+          // Always overwriting file completely is most reliable.
+          // It is slow, but fixed size write is more reliable with broken FAT32 driver.
+          //
+          OcSetFileData (
+            OcLog->FileSystem,
+            OcLog->FilePath,
+            Private->AsciiBuffer,
+            (UINT32)Private->AsciiBufferSize
+            );
+        }
       }
     }
 
@@ -448,7 +501,6 @@ OcLogAddEntry (
 {
   EFI_STATUS           Status;
   OC_LOG_PRIVATE_DATA  *Private;
-  BOOLEAN              IsFiltered;
 
   ASSERT (OcLog != NULL);
   ASSERT (FormatString != NULL);
@@ -462,14 +514,7 @@ OcLogAddEntry (
     return EFI_SUCCESS;
   }
 
-  //
-  // Filter log.
-  //
-  Status     = EFI_SUCCESS;
-  IsFiltered = IsPrefixFiltered (FormatString, Private->FlexFilters, Private->BlacklistFiltering);
-  if (!IsFiltered) {
-    Status = InternalLogAddEntry (Private, OcLog, ErrorLevel, FormatString, Marker);
-  }
+  Status = InternalLogAddEntry (Private, OcLog, ErrorLevel, Private->FlexFilters, Private->BlacklistFiltering, FormatString, Marker);
 
   if (  ((ErrorLevel & OcLog->HaltLevel) != 0)
      && (AsciiStrnCmp (FormatString, "\nASSERT_RETURN_ERROR", L_STR_LEN ("\nASSERT_RETURN_ERROR")) != 0)
@@ -568,12 +613,14 @@ OcConfigureLogProtocol (
   EFI_HANDLE           Handle;
   EFI_FILE_PROTOCOL    *LogRoot;
   CHAR16               *LogPath;
+  EFI_FILE_PROTOCOL    *UnsafeLogFile;
 
   ASSERT (LogModules != NULL);
 
   if ((Options & (OC_LOG_FILE | OC_LOG_ENABLE)) == (OC_LOG_FILE | OC_LOG_ENABLE)) {
-    LogRoot = NULL;
-    LogPath = GetLogPath (LogPrefixPath);
+    LogRoot       = NULL;
+    LogPath       = GetLogPath (LogPrefixPath);
+    UnsafeLogFile = NULL;
 
     if (LogPath != NULL) {
       if (LogFileSystem != NULL) {
@@ -594,14 +641,31 @@ OcConfigureLogProtocol (
         }
       }
 
+      if ((LogRoot != NULL) && ((Options & OC_LOG_UNSAFE) != 0)) {
+        Status = OcSafeFileOpen (
+                   LogRoot,
+                   &UnsafeLogFile,
+                   LogPath,
+                   EFI_FILE_MODE_CREATE | EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
+                   0
+                   );
+        if (EFI_ERROR (Status)) {
+          DEBUG ((DEBUG_ERROR, "OCL: Failure opening log file - %r\n", Status));
+          UnsafeLogFile = NULL;
+          LogRoot->Close (LogRoot);
+          LogRoot = NULL;
+        }
+      }
+
       if (LogRoot == NULL) {
         FreePool (LogPath);
         LogPath = NULL;
       }
     }
   } else {
-    LogRoot = NULL;
-    LogPath = NULL;
+    LogRoot       = NULL;
+    LogPath       = NULL;
+    UnsafeLogFile = NULL;
   }
 
   //
@@ -619,16 +683,21 @@ OcConfigureLogProtocol (
       OcLog->FileSystem->Close (OcLog->FileSystem);
     }
 
+    if (OcLog->UnsafeLogFile != NULL) {
+      OcLog->UnsafeLogFile->Close (OcLog->UnsafeLogFile);
+    }
+
     if (OcLog->FilePath != NULL) {
       FreePool (OcLog->FilePath);
     }
 
-    OcLog->Options      = Options;
-    OcLog->DisplayDelay = DisplayDelay;
-    OcLog->DisplayLevel = DisplayLevel;
-    OcLog->HaltLevel    = HaltLevel;
-    OcLog->FileSystem   = LogRoot;
-    OcLog->FilePath     = LogPath;
+    OcLog->Options       = Options;
+    OcLog->DisplayDelay  = DisplayDelay;
+    OcLog->DisplayLevel  = DisplayLevel;
+    OcLog->HaltLevel     = HaltLevel;
+    OcLog->FileSystem    = LogRoot;
+    OcLog->FilePath      = LogPath;
+    OcLog->UnsafeLogFile = UnsafeLogFile;
 
     Status = EFI_SUCCESS;
   } else {
@@ -636,20 +705,21 @@ OcConfigureLogProtocol (
     Status  = EFI_OUT_OF_RESOURCES;
 
     if (Private != NULL) {
-      Private->Signature          = OC_LOG_PRIVATE_DATA_SIGNATURE;
-      Private->AsciiBufferSize    = OC_LOG_BUFFER_SIZE;
-      Private->NvramBufferSize    = OC_LOG_NVRAM_BUFFER_SIZE;
-      Private->OcLog.Revision     = OC_LOG_REVISION;
-      Private->OcLog.AddEntry     = OcLogAddEntry;
-      Private->OcLog.GetLog       = OcLogGetLog;
-      Private->OcLog.SaveLog      = OcLogSaveLog;
-      Private->OcLog.ResetTimers  = OcLogResetTimers;
-      Private->OcLog.Options      = Options;
-      Private->OcLog.DisplayDelay = DisplayDelay;
-      Private->OcLog.DisplayLevel = DisplayLevel;
-      Private->OcLog.HaltLevel    = HaltLevel;
-      Private->OcLog.FileSystem   = LogRoot;
-      Private->OcLog.FilePath     = LogPath;
+      Private->Signature           = OC_LOG_PRIVATE_DATA_SIGNATURE;
+      Private->AsciiBufferSize     = OC_LOG_BUFFER_SIZE;
+      Private->NvramBufferSize     = OC_LOG_NVRAM_BUFFER_SIZE;
+      Private->OcLog.Revision      = OC_LOG_REVISION;
+      Private->OcLog.AddEntry      = OcLogAddEntry;
+      Private->OcLog.GetLog        = OcLogGetLog;
+      Private->OcLog.SaveLog       = OcLogSaveLog;
+      Private->OcLog.ResetTimers   = OcLogResetTimers;
+      Private->OcLog.Options       = Options;
+      Private->OcLog.DisplayDelay  = DisplayDelay;
+      Private->OcLog.DisplayLevel  = DisplayLevel;
+      Private->OcLog.HaltLevel     = HaltLevel;
+      Private->OcLog.FileSystem    = LogRoot;
+      Private->OcLog.FilePath      = LogPath;
+      Private->OcLog.UnsafeLogFile = UnsafeLogFile;
 
       //
       // Write filters into Private.
@@ -667,7 +737,7 @@ OcConfigureLogProtocol (
           ++LogModules;
         }
 
-        Private->FlexFilters = OcStringSplit (LogModules, L',', FALSE);
+        Private->FlexFilters = OcStringSplit (LogModules, L',', OcStringFormatAscii);
       }
 
       Handle = NULL;
@@ -688,7 +758,10 @@ OcConfigureLogProtocol (
 
   if (LogRoot != NULL) {
     if (!EFI_ERROR (Status)) {
-      if (OC_LOG_PRIVATE_DATA_FROM_OC_LOG_THIS (OcLog)->AsciiBufferSize > 0) {
+      if (  ((Options & OC_LOG_UNSAFE) == 0)
+         && (OC_LOG_PRIVATE_DATA_FROM_OC_LOG_THIS (OcLog)->AsciiBufferSize > 0)
+            )
+      {
         OcSetFileData (
           LogRoot,
           LogPath,
@@ -697,6 +770,10 @@ OcConfigureLogProtocol (
           );
       }
     } else {
+      if (UnsafeLogFile != NULL) {
+        UnsafeLogFile->Close (UnsafeLogFile);
+      }
+
       LogRoot->Close (LogRoot);
       FreePool (LogPath);
     }

@@ -21,9 +21,9 @@
 
 #include <Protocol/OcBootEntry.h>
 
-UINTN  gLinuxBootFlags = LINUX_BOOT_ALL & ~(LINUX_BOOT_ADD_DEBUG_INFO | LINUX_BOOT_LOG_VERBOSE | LINUX_BOOT_ADD_RW);
+UINTN  gLinuxBootFlags = LINUX_BOOT_ALL & ~(LINUX_BOOT_ADD_DEBUG_INFO | LINUX_BOOT_LOG_VERBOSE | LINUX_BOOT_LOG_GRUB_VARS | LINUX_BOOT_ADD_RW);
 
-OC_FLEX_ARRAY  *mParsedLoadOptions;
+STATIC OC_FLEX_ARRAY  *mParsedLoadOptions;
 
 OC_PICKER_CONTEXT  *gPickerContext;
 OC_FLEX_ARRAY      *gLoaderEntries;
@@ -94,10 +94,10 @@ STATIC
 EFI_STATUS
 EFIAPI
 OcGetLinuxBootEntries (
-  IN           OC_PICKER_CONTEXT  *PickerContext,
-  IN     CONST EFI_HANDLE         Device,
-  OUT       OC_PICKER_ENTRY       **Entries,
-  OUT       UINTN                 *NumEntries
+  IN OUT         OC_PICKER_CONTEXT  *PickerContext,
+  IN     CONST EFI_HANDLE           Device OPTIONAL,
+  OUT       OC_PICKER_ENTRY         **Entries,
+  OUT       UINTN                   *NumEntries
   )
 {
   EFI_STATUS                       Status;
@@ -265,7 +265,8 @@ OC_BOOT_ENTRY_PROTOCOL
   mLinuxBootEntryProtocol = {
   OC_BOOT_ENTRY_PROTOCOL_REVISION,
   OcGetLinuxBootEntries,
-  OcFreeLinuxBootEntries
+  OcFreeLinuxBootEntries,
+  NULL
 };
 
 EFI_STATUS
@@ -297,9 +298,9 @@ UefiMain (
   if (!EFI_ERROR (Status)) {
     AddBootFlags    = 0;
     RemoveBootFlags = 0;
-    OcParsedVarsGetInt (mParsedLoadOptions, L"flags", &gLinuxBootFlags, TRUE);
-    OcParsedVarsGetInt (mParsedLoadOptions, L"flags+", &AddBootFlags, TRUE);
-    OcParsedVarsGetInt (mParsedLoadOptions, L"flags-", &RemoveBootFlags, TRUE);
+    OcParsedVarsGetInt (mParsedLoadOptions, L"flags", &gLinuxBootFlags, OcStringFormatUnicode);
+    OcParsedVarsGetInt (mParsedLoadOptions, L"flags+", &AddBootFlags, OcStringFormatUnicode);
+    OcParsedVarsGetInt (mParsedLoadOptions, L"flags-", &RemoveBootFlags, OcStringFormatUnicode);
     gLinuxBootFlags |= AddBootFlags;
     gLinuxBootFlags &= ~RemoveBootFlags;
   } else {
